@@ -1,0 +1,84 @@
+@echo off
+chcp 65001 >nul
+setlocal EnableExtensions
+
+title ANF3 Laboratory Records - Local Server
+set "APP_DIR=%~dp0"
+cd /d "%APP_DIR%"
+set "VENV_DIR=%APP_DIR%.venv"
+set "VENV_PY=%VENV_DIR%\Scripts\python.exe"
+
+rem Checking only for python.exe is not enough: a .venv that was copied, moved
+rem or half-restored still has python.exe but no usable pyvenv.cfg, and the
+rem launcher then hands the user a bare "No pyvenv.cfg file" and quits. Probe
+rem the environment for real, and repair it once before giving up.
+call :probe_env
+if not defined ENV_OK (
+  echo [INFO] The local Python environment is missing or broken. Repairing it...
+  echo.
+  call "%APP_DIR%INSTALL.bat"
+  if errorlevel 1 goto :setup_failed
+  call :probe_env
+  if not defined ENV_OK goto :setup_failed
+  echo.
+)
+
+if not exist "%APP_DIR%words" mkdir "%APP_DIR%words"
+if not exist "%APP_DIR%pdfs" mkdir "%APP_DIR%pdfs"
+
+echo.
+echo ============================================
+echo   ANF3 LABORATORY RECORDS v7
+echo ============================================
+echo   Starting the local server...
+echo   If port 8000 is taken by another program,
+echo   the next free port is used automatically
+echo   and the address is printed below.
+echo.
+echo   Keep this window open while using the app.
+echo   Press Ctrl+C to stop the server.
+echo ============================================
+echo.
+
+set "ANF3_HOST=127.0.0.1"
+set "ANF3_PORT=8000"
+"%VENV_PY%" "%APP_DIR%server\pdf_server.py"
+set "EXIT_CODE=%errorlevel%"
+
+echo.
+if not "%EXIT_CODE%"=="0" (
+  echo [ERROR] The server stopped with code %EXIT_CODE%.
+  echo         The port is chosen automatically, so a busy port is not the cause.
+  echo         Run INSTALL.bat and try again.
+) else (
+  echo [INFO] Server stopped.
+)
+pause
+exit /b %EXIT_CODE%
+
+:setup_failed
+echo.
+echo ============================================
+echo  [ERROR] Setup could not be completed.
+echo ============================================
+echo  The local Python environment at
+echo    %VENV_DIR%
+echo  could not be built. Try this, in order:
+echo.
+echo    1. Delete the .venv folder in this directory, then run INSTALL.bat
+echo    2. Check that this PC can reach the internet ^(uv and pip need it^)
+echo    3. Make sure this folder is not read-only or inside OneDrive sync
+echo.
+pause
+exit /b 1
+
+rem ---------------------------------------------------------------------------
+rem Sets ENV_OK only when Python starts AND the server's dependency is present.
+:probe_env
+set "ENV_OK="
+if not exist "%VENV_PY%" goto :eof
+if not exist "%VENV_DIR%\pyvenv.cfg" goto :eof
+"%VENV_PY%" -c "import flask" >nul 2>&1
+if errorlevel 1 goto :eof
+set "ENV_OK=1"
+goto :eof

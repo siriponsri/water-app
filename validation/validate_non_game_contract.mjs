@@ -1,0 +1,165 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import crypto from 'node:crypto';
+import { fileURLToPath } from 'node:url';
+
+const ROOT = path.resolve(fileURLToPath(new URL('..', import.meta.url)));
+const failures = [];
+const warnings = [];
+
+function read(relativePath) {
+  const absolutePath = path.join(ROOT, relativePath);
+  if (!fs.existsSync(absolutePath)) {
+    failures.push(`${relativePath}: missing`);
+    return '';
+  }
+  return fs.readFileSync(absolutePath, 'utf8');
+}
+
+function pass(message) {
+  console.log(`PASS ${message}`);
+}
+
+function fail(message) {
+  failures.push(message);
+  console.log(`FAIL ${message}`);
+}
+
+function warn(message) {
+  warnings.push(message);
+  console.log(`WARN ${message}`);
+}
+
+function assert(condition, message) {
+  if (condition) pass(message);
+  else fail(message);
+}
+
+const expectedBinders = [
+  'b10-pw-prw', 'b10-em-air', 'b10-ca', 'b10-cv',
+  'b12-pw-prw', 'b12-em-air', 'b12-ca', 'b12-cv',
+  'b16-pw-prw', 'b16-wfi', 'b16-em-air', 'b16-ca-n2', 'b16-cv',
+  'other-locations'
+];
+const expectedFrontendBinders = [...expectedBinders, 'reserve-spare'];
+
+const expectedScripts = [
+  'google/app-scripts/air-test.gs',
+  'google/app-scripts/RPP2-air-record.gs',
+  'google/app-scripts/water-r.gs',
+  'google/app-scripts/RPP2-water-record.gs',
+  'google/app-scripts/Testing.gs',
+  'google/app-scripts/RPP2-cv-record.gs'
+];
+
+console.log('ANF3 non-game contract audit');
+console.log(`root=${ROOT}`);
+
+const matrix = read('docs/CABINET_WORKFLOW_MATRIX.md');
+/* The active table stops at the first "### Inside …" sub-table: those rows
+   describe what is inside a binder, not binders on the shelf. */
+const activeMatrixSection = (matrix.split('## Reserve instances')[0].split('## Active binder instances')[1] || '').split('### Inside')[0];
+const matrixIds = [...activeMatrixSection.matchAll(/^\| `([^`]+)` \|/gm)].map((match) => match[1]);
+assert(matrixIds.length === 14, `Cabinet matrix has 14 active rows (found ${matrixIds.length})`);
+assert(expectedBinders.every((id) => matrixIds.includes(id)), 'Cabinet matrix contains every required active destination');
+assert(new Set(matrixIds).size === matrixIds.length, 'Cabinet matrix has no duplicate active row');
+
+const manifestText = read('design-assets/manifest.json');
+let manifest;
+try {
+  manifest = JSON.parse(manifestText);
+} catch (error) {
+  fail(`design-assets/manifest.json is valid JSON (${error.message})`);
+}
+if (manifest) {
+  assert(manifest.auditedCapacity?.activeDestinations === 14, 'Asset manifest declares 14 active destinations');
+  assert(manifest.semanticRules?.binderColor === 'building-or-location-only', 'Asset manifest preserves location-only binder color semantics');
+  const assetIds = new Set((manifest.assets || []).map((asset) => asset.id));
+  for (const id of ['binder-blue-b10', 'binder-violet-b12', 'binder-mint-b16', 'binder-orange-other', 'binder-pink-coming-soon', 'cabinet-modular-light', 'cabinet-modular-dark']) {
+    assert(assetIds.has(id), `Asset manifest includes ${id}`);
+  }
+  for (const asset of manifest.assets || []) {
+    assert(fs.existsSync(path.join(ROOT, 'design-assets', asset.file)), `Asset file exists: ${asset.file}`);
+  }
+}
+
+const scriptContents = [];
+for (const relativePath of expectedScripts) {
+  const source = read(relativePath);
+  if (source) scriptContents.push([relativePath, source]);
+}
+assert(scriptContents.length === expectedScripts.length, 'Exactly six required copy-ready Apps Script files exist');
+const scriptFiles = [];
+function collectCodeGs(directory) {
+  if (!fs.existsSync(directory)) return;
+  for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+    const absolutePath = path.join(directory, entry.name);
+    if (entry.isDirectory()) collectCodeGs(absolutePath);
+    else if (entry.isFile() && entry.name.endsWith('.gs')) scriptFiles.push(path.relative(ROOT, absolutePath).replaceAll(path.sep, '/'));
+  }
+}
+collectCodeGs(path.join(ROOT, 'google/app-scripts'));
+assert(scriptFiles.length === 6, `google/app-scripts contains exactly six deployable .gs files (found ${scriptFiles.length})`);
+
+const requiredConstantPatterns = [
+  /ANF3_API_VERSION/,
+  /ANF3_IMPLEMENTATION_VERSION/,
+  /ANF3_TIME_ZONE\s*=\s*['"]Asia\/Bangkok['"]/,
+  /ANF3_DOMAIN/
+];
+const systemScriptPaths = new Set([
+  'google/app-scripts/RPP2-air-record.gs',
+  'google/app-scripts/RPP2-water-record.gs',
+  'google/app-scripts/RPP2-cv-record.gs'
+]);
+for (const [relativePath, source] of scriptContents.filter(([path]) => systemScriptPaths.has(path))) {
+  const patterns = relativePath.endsWith('RPP2-cv-record.gs') ? [] : requiredConstantPatterns;
+  const missing = patterns.filter((pattern) => !pattern.test(source));
+  assert(missing.length === 0, `${relativePath} declares shared API/version/time-zone/domain constants`);
+  assert(/verify[A-Za-z]+Setup\s*\(/.test(source), `${relativePath} exposes a verify…Setup function`);
+  if (!relativePath.endsWith('RPP2-cv-record.gs')) assert(/PropertiesService/.test(source), `${relativePath} uses Script Properties for configuration`);
+  assert(!/(?:syncToken|ANF3_SYNC_TOKEN|Bearer)\s*[:=]\s*['"][^'"$]{8,}/i.test(source), `${relativePath} has no obvious hardcoded token`);
+}
+
+const appData = read('apps/web/src/appData.ts');
+const appSource = read('apps/web/src/App.tsx');
+assert(/b10-pw-prw|binderInstances|CABINET_WORKFLOW_MATRIX/.test(appData), 'Frontend derives from a typed Cabinet/binder registry');
+assert(/Cabinet|List/.test(appSource), 'Frontend exposes Cabinet/List parity controls');
+assert(expectedFrontendBinders.every((id) => appData.includes(id)), 'Frontend contains every binder ID on the shelf');
+
+const cvRouting = read('docs/CV_TEMPLATE_ROUTING_CONTRACT.md');
+const pdfServer = read('server/pdf_server.py');
+for (const route of ['cleaning-validation-contact', 'cleaning-validation-rinse-pour', 'cleaning-validation-rinse-membrane']) {
+  assert(cvRouting.includes(route), `CV routing contract includes ${route}`);
+  assert(pdfServer.includes(route), `PDF service includes ${route}`);
+}
+assert(/TEMPLATE_DIR/.test(pdfServer) && /send_file\(pdf_path/.test(pdfServer), 'PDF service uses server-owned template/output resolution');
+assert(/ANF3_HOST['"]?\s*,\s*['"]127\.0\.0\.1['"]/.test(pdfServer), 'PDF service defaults to loopback binding');
+
+const baseline = read('validation/games-baseline.sha256');
+for (const line of baseline.split(/\r?\n/).filter(Boolean)) {
+  const separator = line.indexOf('  ');
+  if (separator < 0) {
+    fail(`games baseline line is malformed: ${line}`);
+    continue;
+  }
+  const expectedHash = line.slice(0, separator).trim().toUpperCase();
+  const relativePath = line.slice(separator + 2).trim();
+  const absolutePath = path.join(ROOT, relativePath);
+  if (!fs.existsSync(absolutePath)) {
+    fail(`Games baseline path exists: ${relativePath}`);
+    continue;
+  }
+  const actualHash = crypto.createHash('sha256').update(fs.readFileSync(absolutePath)).digest('hex').toUpperCase();
+  assert(actualHash === expectedHash, `Games freeze hash matches: ${relativePath}`);
+}
+
+if (!pdfServer.includes('cleaning-validation-rinse-pour') || !pdfServer.includes('cleaning-validation-rinse-membrane')) {
+  warn('CV Rinse dedicated template routes are not yet implemented; keep Rinse PDF blocked');
+}
+if (!/b10-pw-prw|binderInstances/.test(appData)) {
+  warn('Frontend Cabinet registry is not yet implemented; current domain folders are not matrix parity');
+}
+
+console.log(`\nSummary: ${failures.length ? 'INCOMPLETE' : 'PASS'}; failures=${failures.length}; warnings=${warnings.length}`);
+if (failures.length) process.exitCode = 1;

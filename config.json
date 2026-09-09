@@ -1,0 +1,17 @@
+{
+  "_readme": [
+    "Runtime configuration for ANF3 Laboratory Records.",
+    "",
+    "Edit with Notepad, save, refresh the browser. No rebuild, no Node, no pnpm.",
+    "This file sits beside START-ANF3.bat and is NOT touched by a rebuild.",
+    "",
+    "Paste the Web App URL ending in /exec for each domain. A value left empty",
+    "falls back to whatever was compiled in from .env.production, so filling in",
+    "one line changes only that domain.",
+    "",
+    "PUBLIC READ endpoints only. Never put ANF3_SYNC_TOKEN here."
+  ],
+  "waterReadUrl": "",
+  "airReadUrl": "",
+  "cvReadUrl": ""
+}

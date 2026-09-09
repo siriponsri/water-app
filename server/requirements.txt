@@ -1,0 +1,4 @@
+flask>=2.0.0
+pywin32>=305
+comtypes>=1.2.0
+pytest>=8.0.0
