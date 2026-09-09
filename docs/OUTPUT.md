@@ -169,4 +169,6 @@ node validation/validate_non_game_contract.mjs --controlled-dir <release-directo
 - No templates, generated Word/PDF outputs, secrets, production exports, or live Apps Script deployments were staged.
 - No unrelated UI redesign, framework migration, or broad refactor was introduced.
 
-The implementation commit should be reviewed together with this file. The final commit hash and push result are reported by the implementer session after commit/push completes.
+The implementation commit was `3106aa8` (`fix: harden release and document verification`) and was pushed successfully to `origin/main`.
+
+This documentation update is part of the final handoff commit.
