@@ -99,6 +99,7 @@ WINDOWS_DEVICE_NAMES = {
     *(f'LPT{number}' for number in range(1, 10))
 }
 CONVERSION_LOCK = threading.Lock()
+TEMPLATE_HASH_CACHE = {}
 
 # Form type folders
 FORM_FOLDERS = [
@@ -854,11 +855,55 @@ def _validate_pdf_route(workflow, payload, document_data):
 
 
 def _hash_file(path):
+    try:
+        stat = os.stat(path)
+        stamp = (stat.st_mtime_ns, stat.st_size)
+        cached = TEMPLATE_HASH_CACHE.get(path)
+        if cached and cached[0] == stamp:
+            return cached[1]
+    except OSError:
+        stamp = None
     digest = hashlib.sha256()
     with open(path, 'rb') as source:
         for chunk in iter(lambda: source.read(1024 * 1024), b''):
             digest.update(chunk)
-    return digest.hexdigest()
+    result = digest.hexdigest()
+    if stamp is not None:
+        TEMPLATE_HASH_CACHE[path] = (stamp, result)
+    return result
+
+
+def _unresolved_placeholders(path):
+    """Return literal placeholders left in the generated document XML."""
+    try:
+        with zipfile.ZipFile(path) as archive:
+            xml = archive.read('word/document.xml').decode('utf-8')
+    except (OSError, KeyError, zipfile.BadZipFile, UnicodeDecodeError):
+        return ['document.xml unavailable']
+    text = re.sub(r'<[^>]+>', '', xml)
+    placeholders = re.findall(r'<[A-Za-z][A-Za-z0-9 ]*>', text)
+    placeholders.extend(re.findall(r'&lt;([A-Za-z][A-Za-z0-9 ]*)&gt;', text))
+    return sorted(set(placeholders))
+
+
+def _worksheet_artifact_conflict(workflow, worksheet_no, pdf_id):
+    """Find an existing worksheet artifact generated from different content."""
+    folder = os.path.join(PDFS_DIR, workflow)
+    if not os.path.isdir(folder):
+        return False
+    for name in os.listdir(folder):
+        if not name.endswith('.json'):
+            continue
+        try:
+            with open(os.path.join(folder, name), encoding='utf-8') as source:
+                metadata = json.load(source)
+        except (OSError, ValueError):
+            continue
+        if (metadata.get('status') == 'ready' and
+                metadata.get('filename') == f'{worksheet_no}.pdf' and
+                metadata.get('pdfId') != pdf_id):
+            return True
+    return False
 
 
 def _pdf_paths(workflow, pdf_id):
@@ -976,6 +1021,19 @@ def create_pdf():
     if not isinstance(document_data, dict):
         return _json_error('data must be an object', 400)
 
+    capacities = {
+        'pw-prw': 30, 'wfi-pus': 30, 'compressed-air': 10, 'em-air': 50,
+        'cleaning-validation-contact': 10,
+        'cleaning-validation-rinse-pour': 30,
+        'cleaning-validation-rinse-membrane': 30,
+    }
+    try:
+        sample_count = int(document_data.get('sampleCount', 0) or 0)
+    except (TypeError, ValueError):
+        sample_count = 0
+    if sample_count > capacities.get(workflow, 0) and not pages:
+        return _json_error('Record exceeds the approved template capacity; split it into pages before generating', 422)
+
     try:
         _validate_pdf_route(workflow, payload, document_data)
     except ValueError as error:
@@ -1005,6 +1063,9 @@ def create_pdf():
     # is always the worksheet number.
     word_path = os.path.join(word_folder, f'{worksheet_no}.docx')
 
+    if _worksheet_artifact_conflict(workflow, worksheet_no, pdf_id):
+        return _json_error('Worksheet already has a generated document with different content; controlled regeneration is required', 409)
+
     if os.path.isfile(pdf_path) and os.path.isfile(metadata_path):
         return jsonify({'pdfId': pdf_id, 'status': 'ready', 'cached': True})
 
@@ -1014,6 +1075,13 @@ def create_pdf():
             build_multipage_docx(template_path, word_path, sanitized_pages)
         else:
             replace_placeholders_in_file(template_path, word_path, document_data)
+        unresolved = _unresolved_placeholders(word_path)
+        if unresolved:
+            try:
+                os.remove(word_path)
+            except OSError:
+                pass
+            return _json_error('Generated DOCX contains unresolved placeholders', 500)
         success, converter, error = convert_to_pdf(word_path, pdf_path)
         if not success or not os.path.isfile(pdf_path):
             print(f'[ERROR] PDF conversion failed: {error or "unknown error"}')

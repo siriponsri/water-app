@@ -82,7 +82,7 @@ node validation/test_worksheet_numbering.mjs
 python validation/validate_release.py
 ```
 
-Use [`TEST_PLAN.md`](TEST_PLAN.md) for the complete release checklist and browser interaction checks.
+Use `docs/GOAL.md` for the complete release checklist, browser interaction checks, and share-drive acceptance criteria.
 
 ## Data and safety rules
 

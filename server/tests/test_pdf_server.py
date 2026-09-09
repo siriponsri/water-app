@@ -1,6 +1,7 @@
 import json
 import subprocess
 import sys
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -28,11 +29,13 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setattr(pdf_server.os.path, 'expanduser', lambda _value: str(tmp_path / 'home'))
 
     def fake_word(_template_path, output_path, _data):
-        Path(output_path).write_bytes(b'word')
+        with zipfile.ZipFile(output_path, 'w') as archive:
+            archive.writestr('word/document.xml', '<w:document><w:body><w:p><w:r><w:t>filled</w:t></w:r></w:p></w:body></w:document>')
         return 1
 
     def fake_multipage(_template_path, output_path, pages):
-        Path(output_path).write_bytes(b'word')
+        with zipfile.ZipFile(output_path, 'w') as archive:
+            archive.writestr('word/document.xml', '<w:document><w:body><w:p><w:r><w:t>filled</w:t></w:r></w:p></w:body></w:document>')
         return len(pages)
 
     def fake_convert(_word_path, pdf_path):

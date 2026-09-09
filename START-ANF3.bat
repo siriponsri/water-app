@@ -80,6 +80,8 @@ if errorlevel 8 (
 echo       Copy complete.
 
 :hand_over
+call :preflight "%LOCAL_DIR%"
+if errorlevel 1 exit /b 1
 if not exist "%LOCAL_DIR%.venv\Scripts\python.exe" (
   echo [2/2] Setting up the Python environment on this PC ^(one time^)...
   set "ANF3_CALLED_BY_LAUNCHER=1"
@@ -97,6 +99,27 @@ if not exist "%LOCAL_DIR%.venv\Scripts\python.exe" (
 echo.
 call "%LOCAL_DIR%START-ANF3.bat"
 exit /b %errorlevel%
+
+rem ---------------------------------------------------------------------------
+rem Release preflight. These files are supplied in the controlled share package;
+rem a missing one must be reported before Flask opens a blank 404 page.
+:preflight
+set "CHECK_DIR=%~1"
+set "PREFLIGHT_OK=1"
+for %%F in ("dist\index.html" "server\pdf_server.py" "config.json" "templates\pw-prw-template.docx" "templates\wfi-pus-template.docx" "templates\ca-template.docx" "templates\em-template.docx" "templates\cv-contact-template.docx") do (
+  if not exist "%CHECK_DIR%%%~F" (
+    echo [ERROR] Release file is missing: %CHECK_DIR%%%~F
+    set "PREFLIGHT_OK=0"
+  )
+)
+if "%PREFLIGHT_OK%"=="0" (
+  echo.
+  echo [ERROR] This share-drive release is incomplete. Ask the owner to publish
+  echo         dist and the controlled templates before using this workstation.
+  pause
+  exit /b 1
+)
+exit /b 0
 
 rem ===========================================================================
 rem  Running from the local working copy: find an ANF3 server or start one.
