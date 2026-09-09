@@ -86,7 +86,7 @@ Set-Content -LiteralPath (Join-Path $stageRoot 'RELEASE.txt') -Encoding UTF8 -Va
     "Package: $packageName",
     "Built: $((Get-Date).ToString('yyyy-MM-dd HH:mm:ss zzz'))",
     'Package type: full source handoff plus local runtime build',
-    'Continue development: read CONTINUE_ON_NEW_MACHINE.md first',
+    'Continue development: read README.md and docs/GOAL.md first',
     'Install/start without Administrator: double-click START-ANF3.bat',
     'Local URL: http://127.0.0.1:8000'
 )

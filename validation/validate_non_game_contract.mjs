@@ -6,11 +6,32 @@ import { fileURLToPath } from 'node:url';
 const ROOT = path.resolve(fileURLToPath(new URL('..', import.meta.url)));
 const failures = [];
 const warnings = [];
+const controlledFlag = process.argv.indexOf('--controlled-dir');
+const controlledValue = controlledFlag >= 0 ? process.argv[controlledFlag + 1] : process.env.ANF3_CONTROLLED_ROOT;
+const CONTROLLED_ROOT = controlledValue ? path.resolve(ROOT, controlledValue) : null;
+
+if (controlledFlag >= 0 && !controlledValue) {
+  failures.push('--controlled-dir requires a directory');
+}
+if (CONTROLLED_ROOT && !fs.existsSync(CONTROLLED_ROOT)) {
+  failures.push(`controlled release directory is missing: ${CONTROLLED_ROOT}`);
+}
 
 function read(relativePath) {
   const absolutePath = path.join(ROOT, relativePath);
   if (!fs.existsSync(absolutePath)) {
     failures.push(`${relativePath}: missing`);
+    return '';
+  }
+  return fs.readFileSync(absolutePath, 'utf8');
+}
+
+function readOptional(relativePath, { controlled = false } = {}) {
+  const absolutePath = controlled && CONTROLLED_ROOT
+    ? path.join(CONTROLLED_ROOT, relativePath)
+    : path.join(ROOT, relativePath);
+  if (!fs.existsSync(absolutePath)) {
+    if (controlled && CONTROLLED_ROOT) failures.push(`${relativePath}: missing from controlled release`);
     return '';
   }
   return fs.readFileSync(absolutePath, 'utf8');
@@ -54,15 +75,20 @@ const expectedScripts = [
 
 console.log('ANF3 non-game contract audit');
 console.log(`root=${ROOT}`);
+console.log(`mode=${CONTROLLED_ROOT ? `controlled (${CONTROLLED_ROOT})` : 'public source'}`);
 
-const matrix = read('docs/CABINET_WORKFLOW_MATRIX.md');
+const matrix = readOptional('docs/CABINET_WORKFLOW_MATRIX.md', { controlled: true });
 /* The active table stops at the first "### Inside …" sub-table: those rows
    describe what is inside a binder, not binders on the shelf. */
 const activeMatrixSection = (matrix.split('## Reserve instances')[0].split('## Active binder instances')[1] || '').split('### Inside')[0];
 const matrixIds = [...activeMatrixSection.matchAll(/^\| `([^`]+)` \|/gm)].map((match) => match[1]);
-assert(matrixIds.length === 14, `Cabinet matrix has 14 active rows (found ${matrixIds.length})`);
-assert(expectedBinders.every((id) => matrixIds.includes(id)), 'Cabinet matrix contains every required active destination');
-assert(new Set(matrixIds).size === matrixIds.length, 'Cabinet matrix has no duplicate active row');
+if (matrix) {
+  assert(matrixIds.length === 14, `Cabinet matrix has 14 active rows (found ${matrixIds.length})`);
+  assert(expectedBinders.every((id) => matrixIds.includes(id)), 'Cabinet matrix contains every required active destination');
+  assert(new Set(matrixIds).size === matrixIds.length, 'Cabinet matrix has no duplicate active row');
+} else if (!CONTROLLED_ROOT) {
+  warn('Controlled cabinet matrix is not in the public checkout; using the typed frontend registry as the source contract');
+}
 
 const manifestText = read('design-assets/manifest.json');
 let manifest;
@@ -127,12 +153,13 @@ assert(/b10-pw-prw|binderInstances|CABINET_WORKFLOW_MATRIX/.test(appData), 'Fron
 assert(/Cabinet|List/.test(appSource), 'Frontend exposes Cabinet/List parity controls');
 assert(expectedFrontendBinders.every((id) => appData.includes(id)), 'Frontend contains every binder ID on the shelf');
 
-const cvRouting = read('docs/CV_TEMPLATE_ROUTING_CONTRACT.md');
+const cvRouting = readOptional('docs/CV_TEMPLATE_ROUTING_CONTRACT.md', { controlled: true });
 const pdfServer = read('server/pdf_server.py');
 for (const route of ['cleaning-validation-contact', 'cleaning-validation-rinse-pour', 'cleaning-validation-rinse-membrane']) {
-  assert(cvRouting.includes(route), `CV routing contract includes ${route}`);
+  if (cvRouting) assert(cvRouting.includes(route), `CV routing contract includes ${route}`);
   assert(pdfServer.includes(route), `PDF service includes ${route}`);
 }
+if (!cvRouting && !CONTROLLED_ROOT) warn('Controlled CV template routing contract is not in the public checkout; server and frontend route registries are checked instead');
 assert(/TEMPLATE_DIR/.test(pdfServer) && /send_file\(pdf_path/.test(pdfServer), 'PDF service uses server-owned template/output resolution');
 assert(/ANF3_HOST['"]?\s*,\s*['"]127\.0\.0\.1['"]/.test(pdfServer), 'PDF service defaults to loopback binding');
 

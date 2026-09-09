@@ -79,6 +79,27 @@ for (const excluded of ['.anf3-port', 'activity-log.jsonl', 'log-forward.json'])
 check(/if errorlevel 8/.test(launcher),
   'START-ANF3.bat must treat robocopy exit codes >= 8 as failure (0-7 are success)');
 
+check(/config\.json/.test(launcher) && /ConvertFrom-Json/.test(launcher),
+  'START-ANF3.bat must validate config.json before starting the local service');
+
+check(/script\[\.\]google\[\.\]com.*\/exec/.test(launcher),
+  'START-ANF3.bat must accept only public Google Apps Script /exec URLs');
+
+check(/:check_converter/.test(launcher) && /LibreOffice/.test(launcher),
+  'START-ANF3.bat must report a missing DOCX-to-PDF converter before launch');
+
+check(/:wait_for_server/.test(launcher) && /\/api\/status/.test(launcher),
+  'START-ANF3.bat must wait for the local service status endpoint');
+
+check(/for \/l %%P in \(8000,1,8039\)/.test(launcher),
+  'START-ANF3.bat must scan the full server port range when the recorded port is unavailable');
+
+check(/\.anf3-launch\.lock/.test(launcher),
+  'START-ANF3.bat must serialize concurrent local refresh/start operations');
+
+check(!/Starting from the share drive instead/i.test(launcher),
+  'START-ANF3.bat must not fall back to starting Flask from the UNC share after copy failure');
+
 check(/if\s+\/i\s+"%APP_DIR%"=="%LOCAL_DIR%"\s+goto\s+:run_here/i.test(launcher),
   'START-ANF3.bat must short-circuit when it is already the local copy, or it hands over to itself forever');
 

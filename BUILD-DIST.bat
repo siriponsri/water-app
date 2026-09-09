@@ -13,7 +13,7 @@ echo ============================================
 echo.
 echo   You usually do NOT need this.
 echo   To change a System DB URL, edit
-echo     dist\config.json
+echo     config.json
 echo   with Notepad and refresh the browser.
 echo   That needs no Node, no pnpm, no rebuild.
 echo.
@@ -53,7 +53,7 @@ echo   install Node, and this computer does not need Node for daily use.
 echo.
 echo   YOU PROBABLY DO NOT NEED TO BUILD AT ALL.
 echo   To point the app at a different System DB, open
-echo     %APP_DIR%dist\config.json
+echo     %APP_DIR%config.json
 echo   in Notepad, paste the /exec URL, save, and refresh the browser.
 echo.
 echo   If you really do need to rebuild, install Node.js LTS from
@@ -68,7 +68,7 @@ echo.
 echo   Install it with:   npm install -g pnpm
 echo   Then run this file again.
 echo.
-echo   Or skip the build entirely: edit dist\config.json in Notepad.
+echo   Or skip the build entirely: edit config.json in Notepad.
 echo.
 pause
 exit /b 1

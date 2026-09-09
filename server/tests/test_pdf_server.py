@@ -201,3 +201,45 @@ def test_word_timeout_only_targets_recorded_winword_pid(tmp_path, monkeypatch):
     assert '1234' in cleanup
     assert 'WINWORD' in cleanup
     assert 'taskkill' not in cleanup.lower()
+
+
+def test_placeholder_replacement_and_gate_cover_headers_and_footers(tmp_path):
+    template = tmp_path / 'template.docx'
+    output = tmp_path / 'output.docx'
+    with zipfile.ZipFile(template, 'w') as archive:
+        body = '<w:document><w:body><w:p><w:r><w:t>&lt;docNo&gt;</w:t></w:r></w:p></w:body></w:document>'
+        header = '<w:hdr><w:p><w:r><w:t>&lt;performedDate&gt;</w:t></w:r></w:p></w:hdr>'
+        footer = '<w:ftr><w:p><w:r><w:t>&lt;approvedDate&gt;</w:t></w:r></w:p></w:ftr>'
+        archive.writestr('word/document.xml', body)
+        archive.writestr('word/header1.xml', header)
+        archive.writestr('word/footer1.xml', footer)
+
+    pdf_server.replace_placeholders_in_file(template, output, {
+        'docNo': 'PW-26-0001',
+        'performedDate': '01 Sep 2026',
+        'approvedDate': '02 Sep 2026',
+    })
+
+    assert pdf_server._unresolved_placeholders(output) == []
+    with zipfile.ZipFile(output) as archive:
+        assert 'PW-26-0001' in archive.read('word/document.xml').decode('utf-8')
+        assert '01 Sep 2026' in archive.read('word/header1.xml').decode('utf-8')
+        assert '02 Sep 2026' in archive.read('word/footer1.xml').decode('utf-8')
+
+
+def test_pdf_cache_is_incomplete_without_the_controlled_docx(client):
+    payload = {
+        'workflow': 'pw-prw',
+        'worksheetNo': 'PW-26-0002',
+        'data': {'analyst': 'A'},
+    }
+    first = client.post('/api/pdfs', json=payload)
+    assert first.status_code == 201
+    created = first.get_json()
+    word_path = Path(pdf_server.WORDS_DIR) / 'pw-prw' / 'PW-26-0002.docx'
+    word_path.unlink()
+
+    regenerated = client.post('/api/pdfs', json=payload)
+    assert regenerated.status_code == 201
+    assert regenerated.get_json()['cached'] is False
+    assert word_path.is_file()
