@@ -1,19 +1,19 @@
 # ANF3 Implementation Output
 
-Date: 2026-09-09  
+Date: 2026-09-10  
 Implementer: Luna / implementation session  
 Branch: `main`  
 Remote: `origin/main`  
-Base commit before this handoff: `fe286d6` (`feat: harden share-drive release workflow`)  
+Base commit before this handoff: `a67c23f` (`docs: record implementation handoff`)  
 Status: `IMPLEMENTATION_COMPLETE` for the public source checkout; `AUDIT_REQUIRED` for controlled-release verification.
 
-This document is the handoff to the planner and auditor session. It records the implementation, the commands actually executed, the evidence obtained, and the checks that still require controlled assets or external systems.
+This document is the handoff to the planner and auditor session. It records the implementation, the commands actually executed, the evidence obtained, and the checks that still require controlled assets or external systems. This update also records the final portable browser-validation fixes completed after the previous handoff.
 
 ## STATUS
 
 The local implementation is complete and the public-source verification gates pass.
 
-The changes harden the supported share-drive release path, protect the local DOCX/PDF generation flow, validate placeholders across all Word XML parts, make incomplete caches regenerate safely, and make public validation usable without owner-only documents or controlled DOCX templates.
+The changes harden the supported share-drive release path, protect the local DOCX/PDF generation flow, validate placeholders across all Word XML parts, make incomplete caches regenerate safely, and make public validation usable without owner-only documents or controlled DOCX templates. The browser validation harnesses now run on the local Windows checkout, exercise the current game route, and explicitly control offline-cache state instead of depending on a Linux-only browser path or stale game selectors.
 
 No production Google Sheet, Apps Script deployment, live endpoint, controlled template, or owner-only document was modified.
 
@@ -37,6 +37,9 @@ Tracked product and validation changes:
 - `validation/validate_launchers.mjs` — checks the launcher lock, config validation, public `/exec` URL rule, converter preflight, status wait, and port scan contract.
 - `validation/validate_non_game_contract.mjs` — supports an optional controlled release directory and uses the typed frontend/server registries when owner-only contracts are absent from the public checkout.
 - `validation/validate_release.py` — separates public source checks from controlled package checks and validates controlled runtime configuration when supplied.
+- `validation/render_screenshots.cjs` — uses the current bacterial-identification game flow, records the retained growth-promotion bookmark as a redirect check, and captures the current training report route.
+- `validation/shot.cjs` — uses the Playwright-managed browser by default, supports `ANF3_BROWSER_PATH`, seeds a local operator fixture, and disables animation during screenshot capture.
+- `validation/validate_interaction.mjs` — uses a portable browser path and makes the cache regression deterministic by simulating offline mode only for the cache portion, dismissing the read-cache dialog, then returning online for quality checks.
 - `package-lock.json` — removed because this repository uses `pnpm-lock.yaml` as its package lock.
 - `docs/OUTPUT.md` — this implementation and verification handoff.
 
@@ -70,6 +73,14 @@ The placeholder test follows the same rule: it is strict when all controlled tem
 
 The existing frontend workflow in the base implementation remains intact, including building context, `/list`, `/print/:domain/:workflow`, local print-fill controls, template-family routing, over-capacity protection, worksheet conflict handling, and per-page payload behavior. No unrelated frontend redesign was introduced in this pass.
 
+### Portable browser validation
+
+The browser harnesses were corrected after the previous handoff exposed two environment and drift problems. `validate_interaction.mjs` previously assumed a fixed Linux browser executable and could leave the application behind an offline dialog while trying to click the quality controls. It now uses `ANF3_BROWSER_PATH` when supplied, otherwise Playwright's installed executable, seeds the read cache, opens the cache path in an explicit offline simulation, closes the application's `Read cached` dialog, and restores online state before checking the quality selector and shelf render ratio.
+
+`render_screenshots.cjs` previously attempted to drive the removed CultureCheck flow through `/games/growth-promotion` with obsolete English selectors. The active router intentionally redirects that bookmark to `/games/bacterial-identification`, so the script now names those two views as redirect checks and drives the current The Sixth Plate flow using the labels present in `BacterialIdentificationGame.tsx`. It verifies the current debrief and saved training report, while keeping all generated PNGs outside the commit.
+
+The local screenshot run passed nine route/report views: home and games views at desktop and mobile sizes, the retained growth-promotion redirect at desktop and mobile sizes, the bacterial campaign at desktop and mobile sizes, and the bacterial debrief/report pair. The six light/dark production screenshots for `/`, `/list`, and `/games` also passed and were visually inspected. No screenshot artifact was retained in the working tree.
+
 ## TESTS / COMMANDS RUN
 
 All commands were run from `C:\Users\Siripon Sri\Desktop\My Project\water-app` on Windows, using the repository's `rtk` command prefix.
@@ -91,6 +102,9 @@ All commands were run from `C:\Users\Siripon Sri\Desktop\My Project\water-app` o
 | `rtk node validation/validate_non_game_contract.mjs` | PASS with 2 controlled-asset warnings; failures 0. |
 | `rtk python validation/validate_cv_package.py` | PASS in public-source mode; controlled CV template check explicitly skipped. |
 | `rtk python validation/validate_release.py` | PASS in public-source mode; controlled DOCX/owner-document checks explicitly skipped. |
+| `rtk node validation/validate_interaction.mjs` | PASS — cache selection survived record navigation; quality modes persisted and reached the shelf at 1x/1.5x; Full was not demoted. |
+| `rtk node validation/render_screenshots.cjs` | PASS — 9 route/report views; no horizontal overflow, duplicate `h1`, duplicate `main`, console error, or page error was reported. |
+| `$env:SHOT_ROUTES="/,/list,/games"; rtk node validation/shot.cjs` | PASS — 6 light/dark production screenshots captured and visually inspected. |
 | `rtk python -m py_compile server/pdf_server.py server/tests/test_pdf_server.py validation/validate_cv_package.py validation/validate_release.py` | PASS. |
 | `rtk git diff --check` | PASS. |
 
@@ -110,6 +124,9 @@ The public audit used the typed frontend registry and active PDF server route re
 - Flask/PDF server tests: PASS, 10/10.
 - Apps Script source/security and worksheet-numbering checks: PASS without deploying or mutating a live system.
 - Launcher, wiring, style, contrast, CV package, release structure, Python compilation, and whitespace checks: PASS.
+- Local browser interaction regression: PASS.
+- Local route/report screenshot audit: PASS for 9 views.
+- Local light/dark production screenshot smoke run: PASS for 6 screenshots.
 - No unresolved test failure remains in the local verification set.
 - Generated `dist/` output was used for build/wiring verification and remains ignored by Git.
 
@@ -124,6 +141,8 @@ The public audit used the typed frontend registry and active PDF server route re
 - `START-ANF3.bat`, `BUILD-DIST.bat`, and `CREATE-DIST-ZIP.ps1`.
 - Active Google Apps Script files and validation fixtures through the repository's source/security/numbering checks.
 - `validation/games-baseline.sha256` and all frozen game files through the game validation gate.
+- The route set and report flow exercised by `validation/render_screenshots.cjs`: `/`, `/games`, `/games/growth-promotion` redirect, `/games/bacterial-identification`, and the generated local training report.
+- The six temporary light/dark screenshots captured by `validation/shot.cjs`, plus the ten temporary route/report screenshots captured by `validation/render_screenshots.cjs`; all were visually inspected and then removed before handoff.
 - The working-tree diff and `git diff --check` output.
 
 The official DOCX templates are not present in this public checkout, so their XML layout and rendered PDFs could not be inspected here.
@@ -139,7 +158,7 @@ The following acceptance gates remain unverified because the required controlled
 - concurrent launcher and busy-port behavior on a target PC;
 - deployed `/exec` endpoint behavior against non-production Sheets;
 - confirmation that deployed Apps Script revisions match the checked-in source;
-- browser interaction/screenshot smoke tests that require a running external Flask/browser setup;
+- controlled browser interaction and screenshot checks on the target laboratory PC, including the target PC's browser, fonts, display scaling, and first-launch conditions;
 - ten-document timing on the actual laboratory machine.
 
 Use the controlled modes when the external package is assembled:
@@ -165,10 +184,9 @@ node validation/validate_non_game_contract.mjs --controlled-dir <release-directo
 - Header/footer replacement and unresolved-placeholder checks are additive to the existing body replacement behavior.
 - The local generation lock is intentionally process-local and protects concurrent requests handled by this Flask process. Cross-machine or multi-process deployment coordination remains outside the supported local release model.
 - Public validation now distinguishes missing controlled assets from source defects instead of treating the public repository as if it contained owner-only assets.
+- Browser validation now uses portable executable discovery and current accessible selectors; the harness explicitly manages the offline dialog and does not leave screenshot or diagnostic artifacts in the repository.
 - `package-lock.json` was removed; `pnpm-lock.yaml` remains the package lock.
 - No templates, generated Word/PDF outputs, secrets, production exports, or live Apps Script deployments were staged.
 - No unrelated UI redesign, framework migration, or broad refactor was introduced.
 
-The implementation commit was `3106aa8` (`fix: harden release and document verification`) and was pushed successfully to `origin/main`.
-
-This documentation update is part of the final handoff commit.
+The preceding implementation commits `fe286d6`, `3106aa8`, and `a67c23f` are already pushed to `origin/main`. This documentation update and the final validation-harness corrections are included in the handoff commit that follows this audit.
