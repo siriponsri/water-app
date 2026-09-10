@@ -336,3 +336,38 @@ def test_failed_replacement_keeps_existing_artifacts_usable(client, monkeypatch)
     }})
     assert failed.status_code == 503
     assert client.get(f"/api/pdfs/{first_id}").status_code == 200
+
+
+@pytest.mark.parametrize('fail_on', [2, 3, 4])
+def test_artifact_promotion_rolls_back_every_mid_commit_failure(tmp_path, monkeypatch, fail_on):
+    old_word = tmp_path / 'worksheet.docx'
+    old_pdf = tmp_path / 'old.pdf'
+    old_metadata = tmp_path / 'old.json'
+    new_word = tmp_path / 'new.docx'
+    new_pdf = tmp_path / 'new.pdf'
+    new_metadata = tmp_path / 'new.json'
+    old_word.write_bytes(b'old word')
+    old_pdf.write_bytes(b'old pdf')
+    old_metadata.write_bytes(b'old metadata')
+    new_word.write_bytes(b'new word')
+    new_pdf.write_bytes(b'new pdf')
+    new_metadata.write_bytes(b'new metadata')
+    real_replace = pdf_server.os.replace
+    calls = {'count': 0}
+
+    def fail_replace(source, destination):
+        calls['count'] += 1
+        if calls['count'] == fail_on:
+            raise OSError('injected promotion failure')
+        return real_replace(source, destination)
+
+    monkeypatch.setattr(pdf_server.os, 'replace', fail_replace)
+    with pytest.raises(OSError):
+        pdf_server._replace_artifact_set(
+            ((str(new_word), str(old_word)), (str(new_pdf), str(old_pdf)), (str(new_metadata), str(old_metadata))),
+            ()
+        )
+    assert old_word.read_bytes() == b'old word'
+    assert old_pdf.read_bytes() == b'old pdf'
+    assert old_metadata.read_bytes() == b'old metadata'
+    assert not list(tmp_path.glob('*.rollback'))

@@ -11,7 +11,7 @@ describe('print fill contract', () => {
 
   it('presents printable fields without internal DOCX names', () => {
     const fields = printableFields({ resultAvg01: '', lotMembrane: '', samplingPoint01: '', sampleCount: '1' });
-    expect(fields.map((field) => field.label)).toEqual(['Average result 01', 'Membrane lot', 'Sampling point 01']);
+    expect(fields.map((field) => field.label)).toEqual(['Membrane lot', 'Sampling point 01', 'Average result 01']);
     expect(fields.map((field) => field.label).join(' ')).not.toMatch(/resultAvg|lotMembrane|sampleCount/);
   });
 });

@@ -39,11 +39,14 @@ describe('laboratory workflow policies', () => {
   it('splits Other into Water, Air, CA and CV binders without exposing storage shards', () => {
     expect(activeBinders('OTHER').map((binder) => binder.id))
       .toEqual(['other-water', 'other-air', 'other-ca', 'other-cv']);
-    expect(binderById('other-water')?.route).toContain('building=Other');
-    expect(binderById('other-water')?.route).toContain('workflow=pw-prw');
+    expect(binderById('other-water')?.route).toBe('/binder/other-water');
     expect(binderById('other-air')?.route).toContain('workflow=em-air');
     expect(binderById('other-ca')?.route).toContain('workflow=compressed-air');
     expect(binderById('other-cv')?.route).toContain('workflow=cv');
+    expect(binderById('other-water')?.sections?.map((section) => section.route)).toEqual([
+      '/list?building=Other&workflow=pw-prw&waterType=all',
+      '/list?building=Other&workflow=wfi-pus&waterType=WFI%2FPUS'
+    ]);
   });
 
   it('preserves binder work and secondary scope in list routes', () => {

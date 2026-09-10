@@ -961,6 +961,42 @@ def _safe_pdf_filename(value):
     return value
 
 
+def _replace_artifact_set(promotions, removals):
+    """Promote a completed document set, restoring every prior byte on failure."""
+    backups = []
+    staged = []
+    try:
+        for source, destination in promotions:
+            backup = destination + '.rollback'
+            if os.path.exists(destination):
+                os.replace(destination, backup)
+                backups.append((backup, destination))
+            os.replace(source, destination)
+            staged.append(destination)
+        for path in removals:
+            if os.path.exists(path):
+                backup = path + '.rollback'
+                os.replace(path, backup)
+                backups.append((backup, path))
+        for backup, _destination in backups:
+            if os.path.exists(backup):
+                os.remove(backup)
+    except OSError:
+        for destination in reversed(staged):
+            try:
+                if os.path.exists(destination):
+                    os.remove(destination)
+            except OSError:
+                pass
+        for backup, destination in reversed(backups):
+            try:
+                if os.path.exists(backup):
+                    os.replace(backup, destination)
+            except OSError:
+                pass
+        raise
+
+
 def _load_pdf_metadata(pdf_id):
     for workflow in WORKFLOW_TEMPLATES:
         pdf_path, metadata_path = _pdf_paths(workflow, pdf_id)
@@ -1167,16 +1203,14 @@ def create_pdf():
             # Do not disturb the controlled pair until DOCX, PDF and sidecar
             # are all complete. A failed conversion therefore leaves the old
             # worksheet available exactly as it was.
-            os.replace(temporary_word, word_path)
-            os.replace(temporary_pdf, pdf_path)
-            os.replace(temporary_metadata, metadata_path)
+            removals = []
             for old_pdf_id in existing_ids:
                 old_pdf_path, old_metadata_path = _pdf_paths(workflow, old_pdf_id)
-                for path in (old_pdf_path, old_metadata_path):
-                    try:
-                        os.remove(path)
-                    except OSError:
-                        pass
+                removals.extend((old_pdf_path, old_metadata_path))
+            _replace_artifact_set(
+                ((temporary_word, word_path), (temporary_pdf, pdf_path), (temporary_metadata, metadata_path)),
+                removals
+            )
             return jsonify({'pdfId': pdf_id, 'status': 'ready', 'cached': False}), 201
         except (OSError, ValueError, zipfile.BadZipFile) as error:
             print(f'[ERROR] PDF generation failed: {error}')

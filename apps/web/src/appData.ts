@@ -154,7 +154,7 @@ const binderDefinitions: BinderDefinition[] = [
   { id: 'b16-em-air', groupId: 'B16', buildingFilter: 'Building 16', workflowId: 'em-air', label: 'Air Sampling', iconId: 'icon-air-sampling', secondaryFilter: { samplingMode: ['passive', 'active'] }, state: 'active', spineLocation: 'BUILDING 16', order: 3 },
   { id: 'b16-ca-n2', groupId: 'B16', buildingFilter: 'Building 16', workflowId: 'compressed-air', label: 'CA & Nitrogen', iconId: 'icon-compressed-air', secondaryFilter: { gasType: ['CA', 'N2'] }, state: 'active', spineLocation: 'OCL BUILDING 16', spineSuffix: 'AND NITROGEN', order: 4 },
   { id: 'b16-cv', groupId: 'B16', buildingFilter: 'Building 16', workflowId: 'cv', label: 'Cleaning Validation', iconId: 'icon-cleaning-validation', secondaryFilter: { samplingFamily: 'all' }, state: 'active', spineLocation: 'BUILDING 16', order: 5 },
-  { id: 'other-water', groupId: 'OTHER', buildingFilter: 'Other', workflowId: 'pw-prw', label: 'Other — Water', iconId: 'icon-water-prw-pw', secondaryFilter: { waterType: 'all' }, state: 'active', spineLocation: 'OTHER LOCATIONS', spineCode: 'OTHER — WATER', spineOverride: { th: [], en: ['PRW, PW, WFI', 'AND PUS RECORDS'] }, order: 1 },
+  { id: 'other-water', groupId: 'OTHER', buildingFilter: 'Other', workflowId: 'pw-prw', label: 'Other — Water', iconId: 'icon-water-prw-pw', state: 'active', spineLocation: 'OTHER LOCATIONS', spineCode: 'OTHER — WATER', spineOverride: { th: [], en: ['PRW, PW, WFI', 'AND PUS RECORDS'] }, ownRoute: '/binder/other-water', order: 1 },
   { id: 'other-air', groupId: 'OTHER', buildingFilter: 'Other', workflowId: 'em-air', label: 'Other — Air', iconId: 'icon-air-sampling', secondaryFilter: { samplingMode: ['passive', 'active'] }, state: 'active', spineLocation: 'OTHER LOCATIONS', spineCode: 'OTHER — AIR', order: 2 },
   { id: 'other-ca', groupId: 'OTHER', buildingFilter: 'Other', workflowId: 'compressed-air', label: 'Other — CA', iconId: 'icon-compressed-air', secondaryFilter: { gasType: ['CA', 'N2'] }, state: 'active', spineLocation: 'OTHER LOCATIONS', spineCode: 'OTHER — CA', order: 3 },
   { id: 'other-cv', groupId: 'OTHER', buildingFilter: 'Other', workflowId: 'cv', label: 'Other — CV', iconId: 'icon-cleaning-validation', secondaryFilter: { samplingFamily: 'all' }, state: 'active', spineLocation: 'OTHER LOCATIONS', spineCode: 'OTHER — CV', order: 4 },
@@ -180,6 +180,11 @@ export const otherLocationSections: BinderSection[] = [
   { id: 'b19-prw', label: 'Building 19 · PRW', detail: 'Process raw water', route: listRoute('Other', 'pw-prw', { waterType: 'all' }) }
 ];
 
+const otherWaterSections: BinderSection[] = [
+  { id: 'other-water-pw-prw', label: 'PRW & PW', detail: 'Process Raw Water and Purified Water', route: listRoute('Other', 'pw-prw', { waterType: 'all' }) },
+  { id: 'other-water-wfi-pus', label: 'WFI / PUS', detail: 'Water for Injection and Purified Utility System', route: listRoute('Other', 'wfi-pus', { waterType: 'WFI/PUS' }) }
+];
+
 function binderRoute(definition: BinderDefinition) {
   if (definition.state !== 'active') return null;
   if (definition.ownRoute) return definition.ownRoute;
@@ -190,7 +195,7 @@ export const binderInstances: BinderInstance[] = binderDefinitions.map((definiti
   ...definition,
   route: binderRoute(definition),
   spine: spineFor(definition),
-  sections: undefined
+  sections: definition.id === 'other-water' ? otherWaterSections : undefined
 }));
 
 /** Binders standing on the shelf, including the reserve file, which is on the

@@ -1337,12 +1337,12 @@ function buildPourTemplatePayload_(record, samples) {
     const s = samples[i - 1] || {};
     const n = cvPad2_(i);
 
-    p['tagNo' + n] = cvString_(s.samplingPoint || s.tagNo || s.samplingTag);
+    p['tagNo' + n] = cvString_(s.tagNo !== undefined ? s.tagNo : s.samplingTag);
     p['samplingPoint' + n] = '';
 
     p['result1' + n] = '';
     p['result2' + n] = '';
-    p['resultAvg' + n] = '';
+    p['resultAvg' + n] = cvString_(s.resultAvg !== undefined ? s.resultAvg : s.resultDisplay);
   }
 
   return p;
@@ -1384,9 +1384,9 @@ function buildMembraneTemplatePayload_(record, samples) {
     const s = samples[i - 1] || {};
     const n = cvPad2_(i);
 
-    p['tagNo' + n] = cvString_(s.samplingPoint || s.tagNo || s.samplingTag);
+    p['tagNo' + n] = cvString_(s.tagNo !== undefined ? s.tagNo : s.samplingTag);
     p['samplingPoint' + n] = '';
-    p['result' + n] = '';
+    p['result' + n] = cvString_(s.result !== undefined ? s.result : s.resultDisplay);
   }
 
   return p;

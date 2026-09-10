@@ -27,8 +27,10 @@ import { getCachedRecord } from './storage';
 import type { Workflow } from './appData';
 import { normalizeCvTestMethod, pdfRouteForRecord, cvSamplingFamily } from './recordPolicy';
 import { documentPayload } from './documentPayload';
+import { mergePrintFill } from './printFill';
 
 export type BatchItem = { recordKey: string; worksheetNo: string };
+export type BatchDrafts = Record<string, Record<string, string>>;
 
 export type BatchProgress = {
   done: number;
@@ -50,7 +52,7 @@ export type BatchRender = {
   skipped: { worksheetNo: string; reason: string }[];
 };
 
-async function pdfForRecord(workflow: Workflow, recordKey: string, presetMethod?: string) {
+async function pdfForRecord(workflow: Workflow, recordKey: string, presetMethod?: string, draft: Record<string, string> = {}) {
   const cached = await getCachedRecord(workflow.domain, workflow.id, recordKey);
   const value = cached ?? await getSystemRecord(workflow, recordKey);
   const record = value.record;
@@ -70,7 +72,7 @@ async function pdfForRecord(workflow: Workflow, recordKey: string, presetMethod?
       cvContext: workflow.id === 'cv'
         ? { samplingFamily: cvSamplingFamily(record), testMethod: method }
         : undefined,
-      data: documentPayload(route, record, value.samples, String(record.worksheetNo || record.docNo || recordKey), method)
+      data: mergePrintFill(documentPayload(route, record, value.samples, String(record.worksheetNo || record.docNo || recordKey), method), draft)
     })
   });
   const result = await response.json();
@@ -90,6 +92,7 @@ export async function renderBatch(
   workflow: Workflow,
   items: BatchItem[],
   presetMethod: string | undefined,
+  drafts: BatchDrafts,
   onProgress: (progress: BatchProgress) => void,
   signal?: AbortSignal
 ): Promise<BatchRender> {
@@ -101,7 +104,7 @@ export async function renderBatch(
     const item = items[index];
     onProgress({ done: index, total: items.length, current: item.worksheetNo });
     try {
-      const { bytes } = await pdfForRecord(workflow, item.recordKey, presetMethod);
+      const { bytes } = await pdfForRecord(workflow, item.recordKey, presetMethod, drafts[item.recordKey]);
       /* Load once here to learn the page count and to fail early on a
          corrupt file, rather than at merge time with the dialog already up. */
       const source = await PDFDocument.load(bytes);

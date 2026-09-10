@@ -506,9 +506,10 @@ function Colophon() {
 
    The frames mount lazily. Twenty PDF viewers at once is enough to stall a
    lab PC, so a worksheet loads its frame when it is scrolled near. */
-function BatchPreview({ workflow, items, presetMethod, onClose }: {
+function BatchPreview({ workflow, items, drafts, presetMethod, onClose }: {
   workflow: Workflow;
   items: BatchItem[];
+  drafts: Record<string, Record<string, string>>;
   presetMethod?: string;
   onClose: () => void;
 }) {
@@ -545,7 +546,7 @@ function BatchPreview({ workflow, items, presetMethod, onClose }: {
     stop.current = controller;
     let live = true;
     let made: BatchRender | null = null;
-    renderBatch(workflow, batchItems, presetMethod, (value) => { if (live) setProgress(value); }, controller.signal)
+    renderBatch(workflow, batchItems, presetMethod, drafts, (value) => { if (live) setProgress(value); }, controller.signal)
       .then((value) => { made = value; if (live) setRender(value); })
       .catch((reason) => { if (live) setFailed(reason instanceof Error ? reason.message : 'สร้างชุดเอกสารไม่สำเร็จ'); });
     return () => {
@@ -553,7 +554,7 @@ function BatchPreview({ workflow, items, presetMethod, onClose }: {
       controller.abort();
       made = null;
     };
-  }, [workflow, batchItems, presetMethod]);
+  }, [workflow, batchItems, drafts, presetMethod]);
 
   useEffect(() => {
     const key = (event: KeyboardEvent) => { if (event.key === 'Escape') onClose(); };
@@ -1501,6 +1502,8 @@ function PrintPage() {
   const navigate = useNavigate();
   const workflow = workflowById(workflowId);
   const [queue, setQueue] = useState(readPrintQueue);
+  const [preflight, setPreflight] = useState(false);
+  const [generate, setGenerate] = useState(false);
   useEffect(() => {
     const sync = () => setQueue(readPrintQueue());
     window.addEventListener('anf3:print-queue', sync);
@@ -1511,7 +1514,17 @@ function PrintPage() {
     .map((item) => ({ recordKey: item.recordKey, worksheetNo: item.worksheetNo }));
   const returnTo = queueReturnTo(queue.filter((item) => item.domain === domain && item.workflow === workflowId));
   if (!items.length) return <div className="page"><div className="state"><Printer size={20} /><h2>Print queue is empty</h2><Link className="text-link" to={returnTo}>Back to records</Link></div></div>;
-  return <BatchPreview workflow={workflow} items={items} presetMethod={queue.find((item) => item.domain === domain && item.workflow === workflowId)?.cvMethod} onClose={() => navigate(returnTo)} />;
+  if (generate) return <BatchPreview workflow={workflow} items={items} drafts={{}} presetMethod={queue.find((item) => item.domain === domain && item.workflow === workflowId)?.cvMethod} onClose={() => navigate(returnTo)} />;
+  return <div className="page wide">
+    <header className="masthead"><h1>Print queue</h1><p>Review the queued worksheets before generating a preview.</p></header>
+    <div className="run">{items.map((item) => <div className="list-row" key={item.recordKey}><span><strong>{item.worksheetNo}</strong><small>Queued worksheet</small></span></div>)}</div>
+    <div className="actions"><button className="primary" type="button" onClick={() => setPreflight(true)}><BookOpen size={15} />Fill in / Edit before print</button><Link className="text-link" to={returnTo}>Cancel</Link></div>
+    {preflight && <section className="print-fill-drawer" role="dialog" aria-modal="true" aria-label="Fill in or edit before print">
+      <header><h2>Fill in / Edit before print</h2><button type="button" onClick={() => setPreflight(false)}><X size={15} />Cancel</button></header>
+      <p>Drafts stay on this computer. Worksheet identity, template route and sample order are locked.</p>
+      <div className="actions"><button type="button" onClick={() => setPreflight(false)}>Cancel</button><button className="primary" type="button" onClick={() => { setPreflight(false); setGenerate(true); }}><BookOpen size={15} />Generate preview</button></div>
+    </section>}
+  </div>;
 }
 
 function Workspace({ workflow, initialRecordKey, initialFilters = {}, presetMethod }: { workflow: Workflow; initialRecordKey?: string; initialFilters?: RecordFilters; presetMethod?: string }) {
@@ -1677,6 +1690,7 @@ function Workspace({ workflow, initialRecordKey, initialFilters = {}, presetMeth
         workflow={workflow}
         items={scopedItems.filter((item) => picked.has(item.recordKey))
           .map((item) => ({ recordKey: item.recordKey, worksheetNo: item.worksheetNo || item.recordId || item.recordKey }))}
+        drafts={{}}
         presetMethod={presetMethod}
         onClose={() => setBatch(false)}
       />}

@@ -29,10 +29,10 @@ This document defines which binders exist. Luna must encode the same data once i
 | `b16-em-air` | B16 | Building 16 | `em-air` | Air Sampling | passive + active |
 | `b16-ca-n2` | B16 | Building 16 | `compressed-air` | CA & Nitrogen | gas type CA/N2 selector or all |
 | `b16-cv` | B16 | Building 16 | `cv` | Cleaning Validation | CV selector |
-| `other-water` | OTHER | `pw-prw` | Water | Other-Water | PW/PRW and WFI/PUS logical routes |
-| `other-air` | OTHER | `em-air` | Air | Other-Air | Environmental Monitoring Air route |
-| `other-ca` | OTHER | `compressed-air` | CA/N2 | Other-CA | Compressed Air / Nitrogen route |
-| `other-cv` | OTHER | `cv` | Contact/Rinse | Other-CV | Cleaning Validation routes |
+| `other-water` | OTHER | Other | `pw-prw` | Other-Water | PW/PRW and WFI/PUS logical routes |
+| `other-air` | OTHER | Other | `em-air` | Other-Air | Environmental Monitoring Air route |
+| `other-ca` | OTHER | Other | `compressed-air` | Other-CA | Compressed Air / Nitrogen route |
+| `other-cv` | OTHER | Other | `cv` | Other-CV | Cleaning Validation routes |
 
 17 active binders. Other retains its orange physical binder family while the
 four domain binders provide unambiguous routes. Exact Building 11, Building

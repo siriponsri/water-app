@@ -47,26 +47,36 @@ export function blankPayloadKeys(payload: Record<string, string>) {
   return Object.keys(payload).filter((key) => payload[key] === '');
 }
 
-const HIDDEN_PAYLOAD_KEYS = /^(docNo|sampleCount|testMethod|samplingFamily|tagNo\d+|Grade\d+)$/;
+const HEADER_FIELDS = [
+  ['productName', 'Product'], ['ProductName', 'Product'], ['building', 'Building'], ['sectionName', 'Section'],
+  ['samplingDate', 'Sampling date'], ['performedDate', 'Performed date'], ['samplingTime', 'Sampling time'],
+  ['temp', 'Room temperature'], ['lotTSA', 'TSA lot'], ['lotPCA', 'PCA lot'], ['lotPlate', 'Plate lot'],
+  ['lotPipette', 'Pipette lot'], ['lotMembrane', 'Membrane lot'], ['lotForceps', 'Forceps lot'],
+  ['lotBuffer', 'Buffer lot'], ['negativeValue', 'Negative control'], ['comment', 'Comment'],
+  ['determinedDate', 'Determined date'], ['concludedDate', 'Concluded date'], ['approvedDate', 'Approved date']
+] as const;
 
-/** Presentation labels are deliberately separate from DOCX keys. The payload
- * remains compatible with the legacy renderer while the operator never sees
- * a placeholder or storage alias. */
-export function printableFields(payload: Record<string, string>) {
-  return Object.keys(payload).filter((key) => !HIDDEN_PAYLOAD_KEYS.test(key)).map((key) => ({
-    key,
-    label: key
-      .replace(/resultAvg(\d*)/i, 'Average result $1')
-      .replace(/result1(\d*)/i, 'Result I $1')
-      .replace(/result2(\d*)/i, 'Result II $1')
-      .replace(/^result(\d*)$/i, 'Result $1')
-      .replace(/samplingPoint(\d*)/i, 'Sampling point $1')
-      .replace(/lotMembrane/i, 'Membrane lot')
-      .replace(/lot([A-Z])/g, (_, letter) => `Media lot ${letter}`)
-      .replace(/([a-z])([A-Z])/g, '$1 $2')
-      .replace(/(\d+)$/, ' $1')
-      .replace(/\s+/g, ' ')
-      .trim()
-      .replace(/^./, (letter) => letter.toUpperCase())
-  }));
+const SAMPLE_FIELDS = [
+  ['samplingPoint', 'Sampling point'], ['roomNo', 'Room / point'], ['grade', 'Grade'],
+  ['result1', 'Result I'], ['result2', 'Result II'], ['resultAvg', 'Average result'],
+  ['result', 'Result'], ['occResult', 'Result'], ['occurResult', 'Result'], ['remark', 'Remark'],
+  ['tempRoom', 'Sample temperature'], ['rhRoom', 'Sample humidity'], ['temp', 'Sample temperature'],
+  ['rh', 'Sample humidity'], ['timeIn', 'Start time'], ['timeOut', 'End time']
+] as const;
+
+export type PrintableField = { key: string; label: string; isResult: boolean };
+
+/** An allowlist per printable field family, deliberately independent of DOCX
+ * placeholders. Unknown payload fields are never surfaced to the operator. */
+export function printableFields(payload: Record<string, string>): PrintableField[] {
+  const fields: PrintableField[] = [];
+  for (const [key, label] of HEADER_FIELDS) {
+    if (Object.prototype.hasOwnProperty.call(payload, key)) fields.push({ key, label, isResult: label.includes('Result') || label === 'Negative control' });
+  }
+  for (const [prefix, label] of SAMPLE_FIELDS) {
+    for (const key of Object.keys(payload).filter((candidate) => new RegExp(`^${prefix}\\d+$`).test(candidate)).sort()) {
+      fields.push({ key, label: `${label} ${key.slice(prefix.length)}`, isResult: label === 'Result' || label.startsWith('Result') });
+    }
+  }
+  return fields;
 }
