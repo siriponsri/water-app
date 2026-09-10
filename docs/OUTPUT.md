@@ -4,8 +4,8 @@ Date: 2026-09-11
 Implementer: Luna / implementation session
 Branch: `main`
 Remote: `origin/main`
-Base commit before this validation refresh: `f2bb2bc`
-Status: `IMPLEMENTATION_COMPLETE` for the local source checkout; live deployment acceptance is `BLOCKED` by read-only Water/Air `Other` building-isolation failures.
+Product source checkpoint before this validation refresh: `eaa7973`
+Status: `IMPLEMENTATION_COMPLETE`; local automatic validation and final read-only live deployment smoke pass. Target-machine and Owner visual gates remain explicit external follow-ups.
 
 This document is the handoff to the planner and auditor session. It records the implementation, the commands actually executed, the evidence obtained, and the checks that still require controlled assets or external systems. This update also records the final portable browser-validation fixes completed after the previous handoff.
 
@@ -15,15 +15,15 @@ The local implementation is complete and the public-source verification gates pa
 
 The changes harden the supported share-drive release path, protect the local DOCX/PDF generation flow, validate placeholders across all Word XML parts, make incomplete caches regenerate safely, and make public validation usable without owner-only documents or controlled DOCX templates. The browser validation harnesses now run on the local Windows checkout, exercise the current game route, and explicitly control offline-cache state instead of depending on a Linux-only browser path or stale game selectors.
 
-No production Google Sheet, Apps Script deployment, controlled template, or owner-only document was modified. A live endpoint was queried read-only for smoke validation and returned a building-isolation failure documented below.
+No production Google Sheet, Apps Script deployment, controlled template, or owner-only document was modified by this session. Live endpoints were queried read-only after the Owner redeployed the corrected Water/Air source.
 
-The local automated gate is complete. Final release acceptance remains blocked until the corrected Water/Air endpoints are deployed and the Owner-controlled target-machine gates are run.
+The local automated gate is complete. Final source-branch status is `READY_WITH_OWNER_GATES` until the target-machine copy-down/converter and visual acceptance gates are executed.
 
 ## VALIDATION REFRESH (2026-09-11)
 
 The repeatable local gate is `validation/run_local_validation.mjs`. With the current-worktree PDF service on port `8011`, it produced `23 PASS`, `0 FAIL`, and `3 NOT_TESTED`, with `deterministicLocalPass=true`. The report contains `VERIFIED_BY_REPOSITORY_INSPECTION`, `VERIFIED_BY_EXECUTION`, and `NOT_TESTED` evidence classes. The three informational checks are live Apps Script deployment, copied installed release, and Owner visual sign-off; they are never converted into local PASS results.
 
-The read-only aggregate smoke completed all scopes and found four failures: Water `pw-prw` and `wfi-pus`, plus Air `em-air` and `compressed-air`, all under `building=Other`. The live response included B10/B12/B16 values. Root cause analysis found a double-escaped whitespace regex in the checked-in Water/Air Apps Script tokenizers; that source defect is now fixed and covered by executable matcher tests. The live deployment still needs the corrected source; no production change was attempted.
+The final read-only aggregate smoke completed all 18 configured Water, Air, and CV scopes with zero failures after redeployment. Root cause analysis found a double-escaped whitespace regex in the Water/Air Apps Script tokenizers; the source fix is covered by executable matcher tests and the live behavior now passes the same building-isolation checks. No production data or deployment was changed by this session.
 
 ## FILES CHANGED
 
@@ -94,9 +94,9 @@ All commands were run from `C:\Users\Siripon Sri\Desktop\My Project\water-app` o
 | Command | Result |
 |---|---|
 | `rtk pnpm check` | PASS — TypeScript project check completed. |
-| `rtk pnpm test` | PASS — 11 test files passed; 78 tests passed; 1 file and 8 tests skipped because controlled DOCX templates are absent. |
+| `rtk pnpm test` | PASS — 15 test files passed; 107 tests passed. |
 | `rtk pnpm build` | PASS — Vite production build completed and generated `dist/index.html` and assets. |
-| `rtk uv run --with pytest --with flask --with pywin32 --with comtypes pytest server/tests` | PASS — 10/10 tests. |
+| `rtk py -3.11 -m pytest server/tests -q` | PASS — 28 tests. |
 | `rtk node validation/test_cv_contract.mjs` | PASS. |
 | `rtk node validation/test_apps_script_security.mjs` | PASS. |
 | `rtk node validation/test_worksheet_numbering.mjs` | PASS. |
@@ -113,6 +113,7 @@ All commands were run from `C:\Users\Siripon Sri\Desktop\My Project\water-app` o
 | `$env:SHOT_ROUTES="/,/list,/games"; rtk node validation/shot.cjs` | PASS — 6 light/dark production screenshots captured and visually inspected. |
 | `rtk python -m py_compile server/pdf_server.py server/tests/test_pdf_server.py validation/validate_cv_package.py validation/validate_release.py` | PASS. |
 | `rtk git diff --check` | PASS. |
+| `ANF3_WATER_SMOKE_URL=... ANF3_AIR_SMOKE_URL=... ANF3_CV_SMOKE_URL=... rtk node validation/validate_deployment_smoke.mjs` | PASS — 18 read-only live scopes; zero building-isolation or cursor failures. |
 
 The two warnings from the non-game contract audit are expected for this checkout:
 
@@ -133,7 +134,7 @@ The public audit used the typed frontend registry and active PDF server route re
 - Local browser interaction regression: PASS.
 - Local route/report screenshot audit: PASS for 9 views.
 - Local light/dark production screenshot smoke run: PASS for 6 screenshots.
-- No unresolved test failure remains in the deterministic local verification set; the live Water `Other` isolation check remains a separate external failure.
+- No unresolved test failure remains in the deterministic local verification set or final live read-only smoke.
 - Generated `dist/` output was used for build/wiring verification and remains ignored by Git.
 
 ## ARTIFACTS INSPECTED
@@ -151,19 +152,16 @@ The public audit used the typed frontend registry and active PDF server route re
 - The six temporary light/dark screenshots captured by `validation/shot.cjs`, plus the ten temporary route/report screenshots captured by `validation/render_screenshots.cjs`; all were visually inspected and then removed before handoff.
 - The working-tree diff and `git diff --check` output.
 
-The official DOCX templates are not present in this public checkout, so their XML layout and rendered PDFs could not be inspected here.
+The checked-in authoritative DOCX templates were used by the seven-route synthetic artifact gate. Controlled owner documents and target-machine rendering remain external acceptance gates.
 
 ## KNOWN LIMITATIONS
 
-The following acceptance gates remain unverified because the required controlled assets or external environment are unavailable:
+The following acceptance gates remain unverified because they require a separate target workstation or Owner sign-off:
 
-- real DOCX generation against the five controlled templates;
-- visual PDF inspection for PW/PRW, WFI/PUS, EM, Compressed Air, CV Contact, CV Pour Plate, and CV Membrane Filtration;
-- Word/LibreOffice conversion on the target laboratory PC;
-- clean-PC first launch from a real UNC/share-drive path;
+- target-workstation Word/LibreOffice conversion and clean-PC first launch from a real UNC/share-drive path;
+- Owner visual PDF/document inspection for PW/PRW, WFI/PUS, EM, Compressed Air, CV Contact, CV Pour Plate, and CV Membrane Filtration;
 - concurrent launcher and busy-port behavior on a target PC;
-- complete deployed `/exec` endpoint traversal; the observed live Water `pw-prw` `Other` request failed because a `Building 12` item was returned;
-- confirmation that deployed Apps Script revisions match the checked-in source;
+- a second independent confirmation of the deployed Apps Script revision identity beyond behavior-based smoke evidence;
 - controlled browser interaction and screenshot checks on the target laboratory PC, including the target PC's browser, fonts, display scaling, and first-launch conditions;
 - ten-document timing on the actual laboratory machine.
 
@@ -181,7 +179,7 @@ node validation/validate_non_game_contract.mjs --controlled-dir <release-directo
 2. Which non-production Apps Script deployments and test Sheets are approved for the end-to-end read/numbering/routing checks?
 3. Which converter is the supported target on each laboratory PC: Microsoft Word, LibreOffice, or both?
 4. The public checkout release identity is `7.1aa`; the owner should retain that identity when assembling the copied share-drive package unless a later controlled release supersedes it.
-5. After the deployed Water revision is corrected, does the read-only live smoke pass all building scopes and allow final acceptance?
+5. Does the clean target workstation pass the copy-down, converter, and visual acceptance gates?
 
 ## DIFF / REGRESSION NOTES
 
