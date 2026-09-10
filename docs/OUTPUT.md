@@ -195,4 +195,4 @@ node validation/validate_non_game_contract.mjs --controlled-dir <release-directo
 - No templates, generated Word/PDF outputs, secrets, production exports, or live Apps Script deployments were staged.
 - No unrelated UI redesign, framework migration, or broad refactor was introduced.
 
-The preceding implementation commits `fe286d6`, `3106aa8`, and `a67c23f` are already pushed to `origin/main`. This documentation update and the final validation-harness corrections are included in the handoff commit that follows this audit.
+The preceding implementation commits `fe286d6`, `3106aa8`, and `a67c23f` are already pushed to `origin/main`. The current validation refresh and final automation changes are committed on `main` and pushed to `origin/main`; coordination-only files remain local.
