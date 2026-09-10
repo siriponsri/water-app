@@ -338,17 +338,21 @@ def test_failed_replacement_keeps_existing_artifacts_usable(client, monkeypatch)
     assert client.get(f"/api/pdfs/{first_id}").status_code == 200
 
 
-@pytest.mark.parametrize('fail_on', [2, 3, 4])
+@pytest.mark.parametrize('fail_on', range(1, 9))
 def test_artifact_promotion_rolls_back_every_mid_commit_failure(tmp_path, monkeypatch, fail_on):
     old_word = tmp_path / 'worksheet.docx'
     old_pdf = tmp_path / 'old.pdf'
     old_metadata = tmp_path / 'old.json'
+    superseded_pdf = tmp_path / 'superseded.pdf'
+    superseded_metadata = tmp_path / 'superseded.json'
     new_word = tmp_path / 'new.docx'
     new_pdf = tmp_path / 'new.pdf'
     new_metadata = tmp_path / 'new.json'
     old_word.write_bytes(b'old word')
     old_pdf.write_bytes(b'old pdf')
     old_metadata.write_bytes(b'old metadata')
+    superseded_pdf.write_bytes(b'superseded pdf')
+    superseded_metadata.write_bytes(b'superseded metadata')
     new_word.write_bytes(b'new word')
     new_pdf.write_bytes(b'new pdf')
     new_metadata.write_bytes(b'new metadata')
@@ -365,9 +369,40 @@ def test_artifact_promotion_rolls_back_every_mid_commit_failure(tmp_path, monkey
     with pytest.raises(OSError):
         pdf_server._replace_artifact_set(
             ((str(new_word), str(old_word)), (str(new_pdf), str(old_pdf)), (str(new_metadata), str(old_metadata))),
-            ()
+            (str(superseded_pdf), str(superseded_metadata))
         )
     assert old_word.read_bytes() == b'old word'
     assert old_pdf.read_bytes() == b'old pdf'
     assert old_metadata.read_bytes() == b'old metadata'
+    assert superseded_pdf.read_bytes() == b'superseded pdf'
+    assert superseded_metadata.read_bytes() == b'superseded metadata'
     assert not list(tmp_path.glob('*.rollback'))
+
+
+def test_artifact_commit_keeps_new_set_when_backup_cleanup_fails(tmp_path, monkeypatch):
+    old_word = tmp_path / 'worksheet.docx'
+    old_word.write_bytes(b'old word')
+    new_word = tmp_path / 'new.docx'
+    new_pdf = tmp_path / 'new.pdf'
+    new_metadata = tmp_path / 'new.json'
+    new_word.write_bytes(b'new word')
+    new_pdf.write_bytes(b'new pdf')
+    new_metadata.write_bytes(b'new metadata')
+
+    real_remove = pdf_server.os.remove
+
+    def fail_backup_cleanup(path):
+        if path.endswith('.rollback'):
+            raise OSError('injected cleanup failure')
+        return real_remove(path)
+
+    monkeypatch.setattr(pdf_server.os, 'remove', fail_backup_cleanup)
+    pdf_server._replace_artifact_set(
+        ((str(new_word), str(old_word)), (str(new_pdf), str(tmp_path / 'current.pdf')),
+         (str(new_metadata), str(tmp_path / 'current.json'))),
+        ()
+    )
+
+    assert old_word.read_bytes() == b'new word'
+    assert (tmp_path / 'current.pdf').read_bytes() == b'new pdf'
+    assert (tmp_path / 'current.json').read_bytes() == b'new metadata'

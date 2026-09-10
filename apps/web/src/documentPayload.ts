@@ -142,11 +142,8 @@ export function documentPayload(workflow: string, record: RecordData, samples: R
   const limit = workflow === 'em-air' ? 50 : workflow === 'compressed-air' ? 10 : workflow === 'cleaning-validation-contact' ? 10 : 30;
   if (workflow === 'compressed-air') payload.tempRoom01 = measure(record.temp);
 
-  /* A Cleaning Validation Rinse worksheet borrows the Water template, and on
-     that form the point being sampled belongs in the TAG column, not the
-     sampling-point column. Results are left blank for the analyst to enter by
-     hand after incubation: this is a worksheet to be worked on, not a report
-     of a finished test. */
+  /* CV Rinse keeps the source contract intact. A sampling point is not a tag,
+     and historical results must never be cleared while preparing a document. */
   const rinse = workflow === 'cleaning-validation-rinse-pour' || workflow === 'cleaning-validation-rinse-membrane';
 
   for (let i = 1; i <= limit; i += 1) {
@@ -157,7 +154,7 @@ export function documentPayload(workflow: string, record: RecordData, samples: R
       : text(sample.samplingPoint || sample.roomNo || sample.room || sample.location);
 
     if (rinse) {
-      payload[`tagNo${suffix}`] = point;
+      payload[`tagNo${suffix}`] = text(sample.tagNo || sample.samplingTag);
       payload[`samplingPoint${suffix}`] = '';
     } else {
       payload[`samplingPoint${suffix}`] = point;
@@ -167,9 +164,9 @@ export function documentPayload(workflow: string, record: RecordData, samples: R
     if (workflow === 'cleaning-validation-rinse-pour') {
       payload[`result1${suffix}`] = '';
       payload[`result2${suffix}`] = '';
-      payload[`resultAvg${suffix}`] = '';
+      payload[`resultAvg${suffix}`] = count(firstOf(sample.resultAvg, sample.resultDisplay));
     } else if (workflow === 'cleaning-validation-rinse-membrane') {
-      payload[`result${suffix}`] = '';
+      payload[`result${suffix}`] = count(firstOf(sample.result, sample.resultDisplay));
     } else if (workflow === 'pw-prw' || method === 'pour-plate') {
       payload[`result1${suffix}`] = count(sample.result1);
       payload[`result2${suffix}`] = count(sample.result2);

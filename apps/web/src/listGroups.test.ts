@@ -14,4 +14,15 @@ describe('List grouping', () => {
     expect(groups.map((group) => group.building)).toEqual(['Other Locations', 'Other Locations']);
     expect(groups[0].items[0].worksheetNo).toBe('CVR-26-OT-0002');
   });
+
+  it('can group compatible work across source buildings', () => {
+    const workflow = workflows.find((item) => item.id === 'pw-prw')!;
+    const groups = groupListItems(workflow, [
+      { recordKey: 'a', worksheetNo: 'WT-26-B10-0001', building: 'Building 10' },
+      { recordKey: 'b', worksheetNo: 'WT-26-B12-0001', building: 'Building 12' }
+    ], 'work');
+    expect(groups).toHaveLength(1);
+    expect(groups[0].building).toBe('All locations');
+    expect(groups[0].items.map((item) => item.building)).toEqual(['Building 10', 'Building 12']);
+  });
 });

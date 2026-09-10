@@ -978,9 +978,6 @@ def _replace_artifact_set(promotions, removals):
                 backup = path + '.rollback'
                 os.replace(path, backup)
                 backups.append((backup, path))
-        for backup, _destination in backups:
-            if os.path.exists(backup):
-                os.remove(backup)
     except OSError:
         for destination in reversed(staged):
             try:
@@ -995,6 +992,18 @@ def _replace_artifact_set(promotions, removals):
             except OSError:
                 pass
         raise
+
+    # Reaching this point means the new DOCX/PDF/metadata set is complete.
+    # Cleanup must not turn a successful commit into a rollback: deleting one
+    # backup and then failing would make the original set impossible to restore.
+    # A leftover rollback file is recoverable housekeeping, while the promoted
+    # artifact set remains internally coherent and available to the caller.
+    for backup, _destination in backups:
+        try:
+            if os.path.exists(backup):
+                os.remove(backup)
+        except OSError:
+            pass
 
 
 def _load_pdf_metadata(pdf_id):

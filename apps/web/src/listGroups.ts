@@ -43,16 +43,16 @@ function describe(workflow: Workflow, item: SearchItem) {
   return { label: 'Rinse · Method not set', key: 'cv:rinse:unknown' };
 }
 
-export function groupListItems(workflow: Workflow, items: SearchItem[]): ListGroup[] {
+export function groupListItems(workflow: Workflow, items: SearchItem[], groupBy: 'building' | 'work' = 'building'): ListGroup[] {
   const groups = new Map<string, ListGroup>();
   items.forEach((item) => {
     const buildingSegment = buildingFilterSegment(item.building);
     const work = describe(workflow, item);
-    const key = `${buildingSegment}:${work.key}`;
+    const key = groupBy === 'work' ? work.key : `${buildingSegment}:${work.key}`;
     const group = groups.get(key) || {
       key,
-      building: buildingLabel(item.building),
-      buildingSegment,
+      building: groupBy === 'work' ? 'All locations' : buildingLabel(item.building),
+      buildingSegment: groupBy === 'work' ? 'ALL' : buildingSegment,
       label: work.label,
       workflowId: workflow.id,
       cvMethod: work.cvMethod,

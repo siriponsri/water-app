@@ -1399,7 +1399,7 @@ function RecordsPage() {
 function ListPage() {
   const online = useOnline();
   const navigate = useNavigate();
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [groups, setGroups] = useState<ListGroup[]>([]);
   const [loading, setLoading] = useState(true);
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -1407,6 +1407,8 @@ function ListPage() {
   const [query, setQuery] = useState(() => searchParams.get('q') || '');
   const [from, setFrom] = useState(() => searchParams.get('from') || '');
   const [to, setTo] = useState(() => searchParams.get('to') || '');
+  const groupBy = searchParams.get('groupBy') === 'work' ? 'work' : 'building';
+  const [detail, setDetail] = useState<{ group: ListGroup; item: SearchItem; record: CachedRecord | null; loading: boolean; error: string } | null>(null);
   const workflowId = searchParams.get('workflow') || '';
   const domainId = searchParams.get('domain') || '';
   const selectedWorkflow = workflowId ? workflowById(workflowId) : undefined;
@@ -1440,7 +1442,7 @@ function ListPage() {
     Promise.all(visibleWorkflows.map(async (workflow) => {
       try {
         const result = await searchAllSystem(workflow, scopeFilters, controller.signal);
-        return groupListItems(workflow, filterRecordScope(result.items, scopeFilters));
+        return groupListItems(workflow, filterRecordScope(result.items, scopeFilters), building ? 'work' : groupBy);
       } catch (reason) {
         if (!controller.signal.aborted) setErrors((current) => ({ ...current, [workflow.id]: reason instanceof Error ? reason.message : 'System DB unavailable' }));
         return [];
@@ -1448,7 +1450,19 @@ function ListPage() {
     })).then((result) => { if (!controller.signal.aborted) setGroups(result.flat()); })
       .finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
-  }, [online, building, workflowId, domainId, searchParams, query, from, to]);
+  }, [online, building, workflowId, domainId, searchParams, query, from, to, groupBy]);
+  const updateUrl = (updates: Record<string, string>) => {
+    const next = new URLSearchParams(searchParams);
+    Object.entries(updates).forEach(([key, value]) => { if (value) next.set(key, value); else next.delete(key); });
+    setSearchParams(next, { replace: true });
+  };
+  const openDetails = (group: ListGroup, item: SearchItem) => {
+    const detailWorkflow = workflowById(group.workflowId)!;
+    setDetail({ group, item, record: null, loading: true, error: '' });
+    getSystemRecord(detailWorkflow, item.recordKey).then((value) => {
+      setDetail((current) => current?.item.recordKey === item.recordKey ? { ...current, record: { domain: detailWorkflow.domain, workflow: detailWorkflow.id, recordKey: item.recordKey, ...value, id: `${detailWorkflow.domain}:${detailWorkflow.id}:${item.recordKey}` }, loading: false } : current);
+    }).catch((reason) => setDetail((current) => current?.item.recordKey === item.recordKey ? { ...current, loading: false, error: reason instanceof Error ? reason.message : 'Record unavailable' } : current));
+  };
 
   const open = (group: ListGroup, item: SearchItem) => {
     const params = new URLSearchParams();
@@ -1483,17 +1497,18 @@ function ListPage() {
 
   return <div className="page wide">
     <header className="masthead"><h1>{domainId ? `${domainId === 'cv' ? 'Cleaning Validation' : domainId[0].toUpperCase() + domainId.slice(1)} records` : 'All records'}</h1><p>{building ? `${building} · ` : ''}Every worksheet grouped by building and work. Open a row or select worksheets to print.</p></header>
-    <div className="list-filters"><label><Search size={15} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search worksheet, product or sampling point" aria-label="Search records" /></label><label>From<input type="date" value={from} onChange={(event) => setFrom(event.target.value)} /></label><label>To<input type="date" value={to} onChange={(event) => setTo(event.target.value)} /></label></div>
+    <div className="list-filters"><label><Search size={15} /><input value={query} onChange={(event) => { setQuery(event.target.value); updateUrl({ q: event.target.value }); }} placeholder="Search worksheet, product or sampling point" aria-label="Search records" /></label><label>From<input type="date" value={from} onChange={(event) => { setFrom(event.target.value); updateUrl({ from: event.target.value }); }} /></label><label>To<input type="date" value={to} onChange={(event) => { setTo(event.target.value); updateUrl({ to: event.target.value }); }} /></label><label>Group by<select value={groupBy} disabled={Boolean(building)} onChange={(event) => updateUrl({ groupBy: event.target.value === 'work' ? 'work' : '' })}><option value="building">Building, then work</option><option value="work">Work</option></select></label></div>
     {Object.entries(errors).map(([key, message]) => <p className="note" key={key}><Info size={14} />{key === 'system' ? message : `${workflowById(key)?.shortName || key}: ${message}`}</p>)}
     {loading ? <p className="state is-loading"><RefreshCw size={18} />Loading records...</p> : groups.length === 0 ? <div className="state"><Search size={20} /><h2>No records</h2><p>There are no records for the selected building.</p></div> : <div className="list-groups">
       <div className="list-toolbar"><label><input type="checkbox" checked={allRows.length > 0 && picked.size === allRows.length} onChange={() => picked.size === allRows.length ? clear() : selectAll()} /> Select compatible</label><span>{picked.size} selected</span>{picked.size > 0 && <><button type="button" onClick={clear}>Clear</button><button type="button" className="primary" onClick={printSelected}><Printer size={14} />Print selected</button></>}</div>
       {groups.map((group) => <section className="list-group" key={group.key}>
         <header><h2>{group.building}</h2><span>{group.label} · {group.items.length}</span></header>
-        <div className="run">{group.items.map((item) => <div className="list-row" key={item.recordKey}><input type="checkbox" disabled={!compatibleWithSelection(group)} checked={picked.has(`${group.workflowId}:${item.recordKey}`)} onChange={() => toggle(group, item)} aria-label={`Select ${item.worksheetNo || item.recordKey}`} title={!compatibleWithSelection(group) ? 'Select worksheets from one compatible work at a time' : undefined} /><button type="button" onClick={() => open(group, item)}>
+        <div className="run">{group.items.map((item) => <div className="list-row" key={item.recordKey}><input type="checkbox" disabled={!compatibleWithSelection(group)} checked={picked.has(`${group.workflowId}:${item.recordKey}`)} onChange={() => toggle(group, item)} aria-label={`Select ${item.worksheetNo || item.recordKey}`} title={!compatibleWithSelection(group) ? 'Select worksheets from one compatible work at a time' : undefined} /><button type="button" onClick={() => openDetails(group, item)}>
           <span><strong>{item.worksheetNo || item.recordId || item.recordKey}</strong><small>{item.building || group.building} · {item.samplingDate || 'No sampling date'}{item.performedDate ? ` · performed ${item.performedDate}` : ''}{item.samplingPoints ? ` · ${item.samplingPoints}` : ''}{item.sampleCount ? ` · ${item.sampleCount} samples` : ''}{group.cvMethod ? ` · ${group.label}` : ''}</small></span><ChevronRight size={14} />
         </button></div>)}</div>
       </section>)}
     </div>}
+    {detail && <section className="print-fill-drawer" role="dialog" aria-modal="true" aria-label="Record details"><header><h2>{detail.item.worksheetNo || detail.item.recordKey}</h2><button type="button" onClick={() => setDetail(null)}><X size={15} />Close</button></header>{detail.loading ? <p className="state is-loading"><RefreshCw size={16} />Loading details...</p> : detail.error ? <p className="note" role="alert"><Info size={14} />{detail.error}</p> : detail.record && <RecordSheet workflow={workflowById(detail.group.workflowId)!} value={detail.record} fresh={true} online={online} presetMethod={detail.group.cvMethod} />}</section>}
   </div>;
 }
 
@@ -1504,6 +1519,12 @@ function PrintPage() {
   const [queue, setQueue] = useState(readPrintQueue);
   const [preflight, setPreflight] = useState(false);
   const [generate, setGenerate] = useState(false);
+  const [records, setRecords] = useState<Record<string, { payload: Record<string, string>; fields: ReturnType<typeof printableFields> }>>({});
+  const [drafts, setDrafts] = useState<Record<string, Record<string, string>>>({});
+  const [activeRecordKey, setActiveRecordKey] = useState('');
+  const [preflightError, setPreflightError] = useState('');
+  const [preflightLoading, setPreflightLoading] = useState(false);
+  const preflightTrigger = useRef<HTMLButtonElement | null>(null);
   useEffect(() => {
     const sync = () => setQueue(readPrintQueue());
     window.addEventListener('anf3:print-queue', sync);
@@ -1512,17 +1533,66 @@ function PrintPage() {
   if (!workflow || workflow.domain !== domain) return <Navigate to="/list" replace />;
   const items = queue.filter((item) => item.domain === domain && item.workflow === workflowId)
     .map((item) => ({ recordKey: item.recordKey, worksheetNo: item.worksheetNo }));
+  const queued = queue.filter((item) => item.domain === domain && item.workflow === workflowId);
   const returnTo = queueReturnTo(queue.filter((item) => item.domain === domain && item.workflow === workflowId));
+  useEffect(() => {
+    if (!preflight || !workflow || !queued.length) return;
+    const controller = new AbortController();
+    setPreflightLoading(true); setPreflightError('');
+    Promise.all(queued.map(async (item) => {
+      const value = await getSystemRecord(workflow, item.recordKey, controller.signal);
+      const method = item.cvMethod || (workflow.id === 'cv' ? normalizeCvTestMethod(value.record.testMethod || value.record.samplingMethod) : undefined);
+      const route = pdfRouteForRecord(workflow, value.record, method);
+      if (!route) throw new Error(`${item.worksheetNo}: no approved document route is available`);
+      const payload = documentPayload(route, value.record, value.samples, item.worksheetNo, method);
+      const saved = readPrintFill(workflow.domain, workflow.id, item.recordKey);
+      return [item.recordKey, { payload, fields: printableFields(payload), draft: mergePrintFill(payload, saved) }] as const;
+    })).then((loaded) => {
+      if (controller.signal.aborted) return;
+      setRecords(Object.fromEntries(loaded.map(([key, value]) => [key, { payload: value.payload, fields: value.fields }])));
+      setDrafts(Object.fromEntries(loaded.map(([key, value]) => [key, Object.fromEntries(value.fields.map((field) => [field.key, value.draft[field.key] || '']))])));
+      setActiveRecordKey((current) => current || loaded[0]?.[0] || '');
+    }).catch((reason) => { if (!controller.signal.aborted) setPreflightError(reason instanceof Error ? reason.message : 'Could not load the queued worksheets.'); })
+      .finally(() => { if (!controller.signal.aborted) setPreflightLoading(false); });
+    return () => controller.abort();
+  }, [preflight, workflow, domain, workflowId, queue]);
+  useEffect(() => {
+    if (!preflight) { preflightTrigger.current?.focus(); return; }
+    const close = (event: KeyboardEvent) => { if (event.key === 'Escape') setPreflight(false); };
+    window.addEventListener('keydown', close);
+    return () => window.removeEventListener('keydown', close);
+  }, [preflight]);
   if (!items.length) return <div className="page"><div className="state"><Printer size={20} /><h2>Print queue is empty</h2><Link className="text-link" to={returnTo}>Back to records</Link></div></div>;
-  if (generate) return <BatchPreview workflow={workflow} items={items} drafts={{}} presetMethod={queue.find((item) => item.domain === domain && item.workflow === workflowId)?.cvMethod} onClose={() => navigate(returnTo)} />;
+  if (generate) return <BatchPreview workflow={workflow} items={items} drafts={drafts} presetMethod={queue.find((item) => item.domain === domain && item.workflow === workflowId)?.cvMethod} onClose={() => navigate(returnTo)} />;
+  const active = records[activeRecordKey];
+  const invalid = active?.fields.some((field) => field.isResult && !resultValueValid(drafts[activeRecordKey]?.[field.key] || '')) || false;
+  const updateDraft = (key: string, value: string) => {
+    setDrafts((current) => {
+      const next = { ...current, [activeRecordKey]: { ...current[activeRecordKey], [key]: value } };
+      writePrintFill(workflow.domain, workflow.id, activeRecordKey, next[activeRecordKey]);
+      return next;
+    });
+  };
+  const resetDraft = () => {
+    if (!active) return;
+    const fresh = Object.fromEntries(active.fields.map((field) => [field.key, active.payload[field.key] || '']));
+    setDrafts((current) => ({ ...current, [activeRecordKey]: fresh }));
+    writePrintFill(workflow.domain, workflow.id, activeRecordKey, fresh);
+  };
   return <div className="page wide">
     <header className="masthead"><h1>Print queue</h1><p>Review the queued worksheets before generating a preview.</p></header>
     <div className="run">{items.map((item) => <div className="list-row" key={item.recordKey}><span><strong>{item.worksheetNo}</strong><small>Queued worksheet</small></span></div>)}</div>
-    <div className="actions"><button className="primary" type="button" onClick={() => setPreflight(true)}><BookOpen size={15} />Fill in / Edit before print</button><Link className="text-link" to={returnTo}>Cancel</Link></div>
+    <div className="actions"><button className="primary" type="button" ref={preflightTrigger} onClick={() => setPreflight(true)}><BookOpen size={15} />Fill in / Edit before print</button><Link className="text-link" to={returnTo}>Cancel</Link></div>
     {preflight && <section className="print-fill-drawer" role="dialog" aria-modal="true" aria-label="Fill in or edit before print">
       <header><h2>Fill in / Edit before print</h2><button type="button" onClick={() => setPreflight(false)}><X size={15} />Cancel</button></header>
-      <p>Drafts stay on this computer. Worksheet identity, template route and sample order are locked.</p>
-      <div className="actions"><button type="button" onClick={() => setPreflight(false)}>Cancel</button><button className="primary" type="button" onClick={() => { setPreflight(false); setGenerate(true); }}><BookOpen size={15} />Generate preview</button></div>
+      <p>Drafts stay on this computer. Worksheet identity, template route, sample count and row order are locked.</p>
+      {preflightLoading ? <p className="state is-loading"><RefreshCw size={16} />Loading worksheets...</p> : preflightError ? <p className="note" role="alert"><Info size={14} />{preflightError}</p> : active && <>
+        <div className="run" aria-label="Queued worksheets">{queued.map((item) => <button type="button" key={item.recordKey} className={activeRecordKey === item.recordKey ? 'is-picked' : ''} onClick={() => setActiveRecordKey(item.recordKey)}><strong>{item.worksheetNo}</strong><small>{item.recordKey === activeRecordKey ? 'Editing draft' : 'Open draft'}</small></button>)}</div>
+        <p className="note"><Lock size={14} />Editing printable values for {queued.find((item) => item.recordKey === activeRecordKey)?.worksheetNo}. Results may be blank, numbers, &lt;1, TNTC, or legacy text.</p>
+        <div className="print-fill-fields">{active.fields.map((field) => <label key={field.key}>{field.label}<input value={drafts[activeRecordKey]?.[field.key] || ''} aria-invalid={field.isResult && !resultValueValid(drafts[activeRecordKey]?.[field.key] || '')} onChange={(event) => updateDraft(field.key, event.target.value)} /></label>)}</div>
+        {invalid && <p className="note" role="alert"><Info size={14} />A result value is too long or contains unsupported brackets.</p>}
+        <div className="actions"><button type="button" onClick={resetDraft}>Reset to System DB</button><button type="button" onClick={() => setPreflight(false)}>Cancel</button><button className="primary" type="button" disabled={invalid} onClick={() => { setPreflight(false); setGenerate(true); }}><BookOpen size={15} />Generate preview</button></div>
+      </>}
     </section>}
   </div>;
 }

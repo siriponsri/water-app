@@ -92,23 +92,23 @@ describe('documentPayload', () => {
     });
   });
 
-  /* A Rinse worksheet borrows the Water template, where the point sampled
-     belongs in the TAG column, and the results are left for the analyst. */
+  /* CV Rinse retains source results; a sampling point never manufactures a
+     tag in the Water-family template. */
   describe('cleaning validation rinse', () => {
-    it('puts the point in tagNo and leaves pour results blank', () => {
-      const payload = documentPayload('cleaning-validation-rinse-pour', { sampleMatrix: 'Rinse' }, [{ samplingPoint: 'Tank 1', result: 5 }], 'CVR-26-B16-0001');
-      expect(payload.tagNo01).toBe('Tank 1');
+    it('keeps a real tag and average result for Pour Plate', () => {
+      const payload = documentPayload('cleaning-validation-rinse-pour', { sampleMatrix: 'Rinse' }, [{ samplingPoint: 'Tank 1', resultAvg: 'TNTC' }], 'CVR-26-B16-0001');
+      expect(payload.tagNo01).toBe('');
       expect(payload.samplingPoint01).toBe('');
       expect(payload.result101).toBe('');
       expect(payload.result201).toBe('');
-      expect(payload.resultAvg01).toBe('');
+      expect(payload.resultAvg01).toBe('TNTC');
     });
 
-    it('puts the point in tagNo and leaves membrane results blank', () => {
-      const payload = documentPayload('cleaning-validation-rinse-membrane', { sampleMatrix: 'Rinse' }, [{ samplingPoint: 'Line 3', result: 7 }], 'CVR-26-B16-0002');
-      expect(payload.tagNo01).toBe('Line 3');
+    it('keeps a real tag and result for Membrane Filtration', () => {
+      const payload = documentPayload('cleaning-validation-rinse-membrane', { sampleMatrix: 'Rinse' }, [{ samplingPoint: 'Line 3', tagNo: 'TAG-3', result: 7 }], 'CVR-26-B16-0002');
+      expect(payload.tagNo01).toBe('TAG-3');
       expect(payload.samplingPoint01).toBe('');
-      expect(payload.result01).toBe('');
+      expect(payload.result01).toBe('7');
     });
 
     it('does not move the point for a plain Water worksheet', () => {
