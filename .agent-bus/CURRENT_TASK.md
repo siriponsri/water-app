@@ -2,7 +2,7 @@
 
 ## Identity
 - Task ID: ANF3-20260910-002
-- Iteration: 8
+- Iteration: 10
 - Planner: Astra
 - Implementer: Luna
 
@@ -138,5 +138,62 @@ Read `.agent-bus/ASTRA_AUDIT.md` in full before editing. Resolve F1–F10 withou
 
 Run the original Iteration 7 suites plus every Required re-test listed in the audit. Browser, installed-release, and seven-route artifact evidence must be produced after the code corrections. Live Apps Script deployment remains Owner-only and must not be performed by Luna.
 
-## Handoff State
-READY_FOR_LUNA_FIX
+## Verification Addendum (2026-09-11)
+- The Iteration 8 implementation and Login addendum are present in the working tree.
+- Local unit, TypeScript, build, server, browser, deployment-fixture, launcher, routing, style, security, and document-artifact checks have been rerun.
+- The Login gate uses `[ชื่อ หรือ ชื่อเล่น]` and `[รหัสพนักงาน]`, follows the Records Cafe theme, and is centered at desktop/mobile widths without horizontal overflow.
+- A hostile review found and fixed URL normalization dropping `groupBy=building`, and cache validation accepting non-empty invalid PDF bytes.
+- Live Apps Script behavior is now verified read-only after the Owner redeployed; target-machine copy-down and Owner visual gates remain explicitly untested.
+
+## Iteration 9 Automation Addendum (2026-09-11)
+
+### User Goal
+Replace the remaining Owner-only verification with detailed, repeatable automated tests wherever the repository can prove the behavior locally. Keep external deployment and production access read-only and report them separately rather than claiming them as automated.
+
+### Verified Current State
+- The latest hostile review confirms the existing happy-path suites do not prove launcher identity/converter health, lock initialization safety, legacy CV aliases, over-capacity React pagination, no-fabrication behavior, populated seven-route artifacts, all-route browser coverage, strict deployment URL/fixture coverage, or worst-case rollback cleanup.
+- At the Iteration 9 handoff the working tree contained staged product changes and uncommitted Agent Bus files; the owner's later authorization permits committing all current files except `.gitignore`.
+
+### Required Changes
+- Harden `START-ANF3.bat` to accept only a valid ANF3 `/api/status` response with converter availability, including already-running services; make lock initialization race-safe and add deterministic launcher race/health tests.
+- Restore active legacy CV mappings and aliases from the real templates; keep missing laboratory values blank in legacy EM/Compressed Air form and print paths; add executable contract tests.
+- Split React document payloads at each authoritative template capacity and send self-contained `pages` dictionaries with header plus page samples; add 31/51-sample tests for affected routes and preserve the seven route contracts.
+- Upgrade document artifact validation to use non-empty route-specific fixtures, prove sample/header mappings and every generated page, inspect all pages, and compare DOCX/PDF content without production data.
+- Expand browser smoke to all seven document routes and document the deterministic request/DOM/accessibility evidence; strengthen deployment smoke with strict Google Apps Script `/exec` validation and complete local fixtures, including CV.
+- Add rollback cleanup-failure fault coverage that exercises both remove and unlink failure paths and proves no `.rollback` sidecars or mixed artifact sets remain.
+- Add one local automated verification entry point that runs the focused suites, writes a machine-readable report with command/result/evidence class, and makes Owner-only external checks informational.
+- Reconcile `VERSION.txt`, `RELEASE.txt`, `STATUS.json`, `CURRENT_TASK.md`, `LOCK.json`, and the Luna report before handoff. Do not claim copied-release, live deployment, or visual sign-off without execution.
+
+### Must Preserve
+- Logical Apps Script contracts, worksheet identity, authoritative DOCX layout/placeholders, per-page self-contained server semantics, and blank missing values.
+- No production Sheets mutation, Apps Script deployment, or external document mutation.
+
+### Verification Required
+- Run the original focused regressions plus the new automated entry point in a clean local/test fixture environment.
+- Prove negative cases: invalid ANF3 status, missing converter, lock initialization race, malformed legacy mappings, over-capacity pagination, populated placeholder mismatch, strict URL rejection, and rollback cleanup failure.
+- Record live deployment/copy-down/visual checks as `NOT RUN` unless actually executed; they must not be represented as automated PASS.
+
+### Definition of Done for Iteration 9
+- [x] The automated entry point exits non-zero on each injected negative case and zero on the complete deterministic local suite.
+- [x] The report clearly separates `VERIFIED_BY_EXECUTION`, `VERIFIED_BY_REPOSITORY_INSPECTION`, and `NOT_TESTED` external evidence.
+- [x] No remaining product-code blocker from the hostile review is left untested or unfixed.
+
+## Iteration 9 Revalidation Addendum (2026-09-11)
+
+- The full local gate was rerun with the current-worktree PDF service on port `8011`: `23 PASS`, `0 FAIL`, and `3 NOT_TESTED`; `deterministicLocalPass=true`.
+- The machine-readable report now contains all three evidence classes: `VERIFIED_BY_REPOSITORY_INSPECTION`, `VERIFIED_BY_EXECUTION`, and `NOT_TESTED`.
+- The three `NOT_TESTED` entries are external-only checks: live deployment, copied installed release, and Owner visual sign-off.
+- A prior read-only live smoke found a deployment mismatch: Water `pw-prw` with `building=Other` returned a `Building 12` item. The checked-in source excludes B12 from `Other` at `google/app-scripts/RPP2-water-record.gs:826`.
+- No production deployment, Sheet mutation, permission change, or external document mutation was performed.
+- The prior mismatch was resolved by the Owner redeployment and is closed by the final aggregate smoke below.
+
+## Iteration 10 Root-Cause Correction Addendum (2026-09-11)
+
+- The final aggregate live read-only smoke completed all 18 configured Water, Air, and CV scopes with zero failures.
+- Root cause was proven in the active Apps Script source: Water and Air tokenizers used a double-escaped whitespace class (`[\\s_.-]+`), so values such as `Building 12` were classified as `Other`.
+- Corrected `google/app-scripts/RPP2-water-record.gs` and `google/app-scripts/RPP2-air-record.gs` to use the real whitespace regex and added source-executed matcher regression tests.
+- The Owner redeployed the corrected Water and Air source using the existing `/exec` URLs; post-deploy behavior matches the source-executed matcher tests.
+- No production Sheet mutation, permission change, or external document mutation was performed by this session.
+
+### Handoff State
+ASTRA_AUDIT_PASS

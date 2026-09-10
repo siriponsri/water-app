@@ -15,7 +15,7 @@
 - Branch: `main`
 - Product source checkpoint: `eaa7973` (`main` and `origin/main` matched before this report refresh).
 - The final documentation checkpoint is committed separately after this validation update.
-- Runtime coordination files, `OVERNIGHT_LUNA.md`, the temporary `luna-overnight.log`, and ignored generated outputs are not release artifacts.
+- Runtime coordination files, `OVERNIGHT_LUNA.md`, and `luna-overnight.log` are included in the owner-authorized audit checkpoint; ignored generated outputs remain excluded.
 
 ## Verified by Execution
 
@@ -102,7 +102,7 @@ The browser gate covered all seven print routes plus Fill-in-before-Generate, no
 - Apps Script source: `google/app-scripts/RPP2-water-record.gs`, `google/app-scripts/RPP2-air-record.gs`.
 - Automated validation: `validation/run_local_validation.mjs`, `validation/test_legacy_document_mapping.mjs`, `validation/fixtures/deployment-smoke.json`, `validation/test_deployment_smoke.mjs`, `validation/validate_browser_smoke.mjs`, `validation/validate_deployment_smoke.mjs`, `validation/validate_document_artifacts.py`, `validation/validate_launchers.mjs`.
 - Release/docs: `VERSION.txt`, `RELEASE.txt`, `.gitignore`, `docs/OUTPUT.md`, and this report.
-- Coordination files were updated separately and are not part of the product release snapshot.
+- Coordination files, `.codex/WORK_STATE.md`, `OVERNIGHT_LUNA.md`, and `luna-overnight.log` are included by owner authorization; generated outputs remain excluded.
 
 ## Residual Risks
 
