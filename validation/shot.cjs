@@ -7,18 +7,25 @@ const routes = (process.env.SHOT_ROUTES || '/,/games').split(',');
 
 (async () => {
   const browser = await chromium.launch({
-    executablePath: '/opt/pw-browsers/chromium',
+    executablePath: process.env.ANF3_BROWSER_PATH || chromium.executablePath(),
     args: ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--no-sandbox'],
   });
   for (const theme of ['light', 'dark']) {
     const context = await browser.newContext({ viewport: { width: 1440, height: 960 }, deviceScaleFactor: 2 });
+    await context.addInitScript(() => {
+      localStorage.setItem('anf3.operator.v2', JSON.stringify({ name: 'Screenshot Audit', code: '0000' }));
+    });
     const page = await context.newPage();
     await page.addInitScript((t) => localStorage.setItem('anf3.theme', t), theme);
     for (const route of routes) {
       const name = route.replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '') || 'home';
       await page.goto(`${BASE}/#${route}`, { waitUntil: 'domcontentloaded' });
       await page.waitForTimeout(3200);
-      await page.screenshot({ path: path.join(OUT, `${name}-${theme}.png`) });
+      await page.screenshot({
+        path: path.join(OUT, `${name}-${theme}.png`),
+        animations: 'disabled',
+        timeout: 120000,
+      });
       console.log('shot', name, theme);
     }
     await context.close();

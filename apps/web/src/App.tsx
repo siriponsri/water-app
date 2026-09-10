@@ -8,7 +8,7 @@ import {
   useOutletContext, useParams, useSearchParams
 } from 'react-router-dom';
 import printJS from 'print-js';
-import { endpointConfigured, getSystemRecord, searchSystem } from './api';
+import { endpointConfigured, getSystemRecord, searchAllSystem, searchSystem } from './api';
 import type { RecordFilters } from './api';
 import { activeBinders, binderById, binderForContext, binderInstances, buildingGroups, calendarId, domains, shelfBinders, tools, workflowById, workflows } from './appData';
 import type { BinderInstance, BuildingGroupId, Tool, Workflow } from './appData';
@@ -33,6 +33,11 @@ import { renderPages, type RenderedPage } from './pdfPreview';
 import type { BatchItem, BatchPart, BatchRender } from './batchPrint';
 import { documentPayload } from './documentPayload';
 import { filterRecordScope } from './recordScope';
+import { buildingChoices, readBuilding, setBuilding } from './buildingContext';
+import { groupListItems } from './listGroups';
+import type { ListGroup } from './listGroups';
+import { readPrintQueue, writePrintQueue } from './printQueue';
+import { blankPayloadKeys, mergePrintFill, readPrintFill, writePrintFill } from './printFill';
 
 const DeskScene = lazy(() => import('./DeskScene'));
 const GamesHub = lazy(() => import('./games/GamesHub'));
@@ -119,6 +124,7 @@ const RAIL_SECONDARY = [
 function Shell() {
   const online = useOnline();
   const location = useLocation();
+  const navigate = useNavigate();
   const [theme, setTheme] = useState(() => localStorage.getItem('anf3.theme') || 'light');
   const [offline, setOffline] = useState(!navigator.onLine);
   const [palette, setPalette] = useState(false);
@@ -161,6 +167,19 @@ function Shell() {
   const toggleTheme = useCallback(() => setTheme((value) => (value === 'light' ? 'dark' : 'light')), []);
   const isCurrent = (to: string) => (to === '/' ? location.pathname === '/' : location.pathname.startsWith(to));
   const insideBinder = useBinderContext();
+  const contextDomain = (location.pathname.match(/^\/records\/(water|air|cv)/)?.[1] || 'water') as 'water' | 'air' | 'cv';
+  const [selectedBuilding, setSelectedBuilding] = useState(() => readBuilding(contextDomain));
+  useEffect(() => {
+    const sync = () => setSelectedBuilding(readBuilding(contextDomain));
+    window.addEventListener('anf3:building-context', sync);
+    return () => window.removeEventListener('anf3:building-context', sync);
+  }, [contextDomain]);
+  const changeBuilding = (value: string) => {
+    setBuilding(contextDomain, value);
+    const params = new URLSearchParams(location.search);
+    if (value) params.set('building', value); else params.delete('building');
+    navigate(`${location.pathname}${params.toString() ? `?${params}` : ''}`);
+  };
   const rail = useRef<HTMLElement>(null);
 
   /* Collapsed to a strip on a narrow screen, the rail can leave the current
@@ -178,11 +197,17 @@ function Shell() {
       <Link className="rail-mark" to="/"><strong>ANF3</strong><span>Laboratory records</span></Link>
       <div className="rail-set">
         {RAIL_PRIMARY.map((item) => <Link key={item.to} className="rail-link" to={item.to} aria-current={isCurrent(item.to) ? 'page' : undefined}>{item.label}</Link>)}
+        <Link className="rail-link" to="/list" aria-current={isCurrent('/list') ? 'page' : undefined}>All records</Link>
       </div>
       <div className="rail-set">
         {RAIL_SECONDARY.map((item) => <Link key={item.to} className="rail-link" to={item.to} aria-current={isCurrent(item.to) ? 'page' : undefined}>{item.label}</Link>)}
       </div>
       <div className="rail-foot">
+        <label className="rail-building">Building
+          <select aria-label="Building context" value={selectedBuilding} onChange={(event) => changeBuilding(event.target.value)}>
+            {buildingChoices.map((choice) => <option key={choice.value} value={choice.value}>{choice.label}</option>)}
+          </select>
+        </label>
         <button className="jump" type="button" onClick={() => setPalette(true)}><Search size={14} />Jump to<kbd>⌘K</kbd></button>
         <p className={`rail-state ${online ? 'is-online' : 'is-offline'}`}>
           {/* A lamp, wired to real state. It is dark when there is nothing to
@@ -1340,7 +1365,7 @@ function RecordsPage() {
   const workflow = workflowById(workflowId);
   if (!workflow || workflow.domain !== domain) return <Navigate to="/" replace />;
 
-  const building = searchParams.get('building') || undefined;
+  const building = searchParams.get('building') || readBuilding(workflow.domain) || undefined;
   const samplingFamily = searchParams.get('samplingFamily') || undefined;
   const testMethod = searchParams.get('testMethod') || undefined;
 
@@ -1360,6 +1385,80 @@ function RecordsPage() {
     samplingMode: searchParams.get('samplingMode') || undefined
   };
   return <Workspace workflow={workflow} initialRecordKey={recordKey} initialFilters={filters} presetMethod={testMethod} />;
+}
+
+function ListPage() {
+  const online = useOnline();
+  const navigate = useNavigate();
+  const [groups, setGroups] = useState<ListGroup[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [building, setBuildingFilter] = useState(() => readBuilding('water'));
+
+  useEffect(() => {
+    const sync = () => setBuildingFilter(readBuilding('water'));
+    window.addEventListener('anf3:building-context', sync);
+    return () => window.removeEventListener('anf3:building-context', sync);
+  }, []);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    setLoading(true); setError('');
+    if (!online) {
+      setGroups([]); setError('Connect to the System DB to load the complete record list.'); setLoading(false);
+      return () => controller.abort();
+    }
+    Promise.all(workflows.map(async (workflow) => {
+      try {
+        const result = await searchAllSystem(workflow, { building: building || undefined, limit: 100 }, controller.signal);
+        return groupListItems(workflow, result.items);
+      } catch (reason) {
+        if (!controller.signal.aborted) setError(reason instanceof Error ? reason.message : 'System DB unavailable');
+        return [];
+      }
+    })).then((result) => { if (!controller.signal.aborted) setGroups(result.flat()); })
+      .finally(() => { if (!controller.signal.aborted) setLoading(false); });
+    return () => controller.abort();
+  }, [online, building]);
+
+  const open = (group: ListGroup, item: SearchItem) => {
+    const params = new URLSearchParams();
+    if (item.building) params.set('building', item.building);
+    if (group.workflowId === 'cv') {
+      params.set('samplingFamily', group.cvMethod === 'contact-plate' ? 'contact-plate' : 'rinse');
+      if (group.cvMethod && group.cvMethod !== 'contact-plate') params.set('testMethod', group.cvMethod);
+    }
+    navigate(`/records/${workflows.find((entry) => entry.id === group.workflowId)?.domain || 'water'}/${group.workflowId}/${encodeURIComponent(item.recordKey)}?${params}`);
+  };
+
+  return <div className="page wide">
+    <header className="masthead"><h1>All records</h1><p>Every worksheet grouped by building and work. Select a row to open the read-only workspace.</p></header>
+    {error && <p className="note"><Info size={14} />{error}</p>}
+    {loading ? <p className="state is-loading"><RefreshCw size={18} />Loading records...</p> : groups.length === 0 ? <div className="state"><Search size={20} /><h2>No records</h2><p>There are no records for the selected building.</p></div> : <div className="list-groups">
+      {groups.map((group) => <section className="list-group" key={group.key}>
+        <header><h2>{group.building}</h2><span>{group.label} · {group.items.length}</span></header>
+        <div className="run">{group.items.map((item) => <button type="button" key={item.recordKey} onClick={() => open(group, item)}>
+          <span><strong>{item.worksheetNo || item.recordId || item.recordKey}</strong><small>{item.samplingDate || 'No sampling date'}{item.performedDate ? ` · performed ${item.performedDate}` : ''}{item.samplingPoints ? ` · ${item.samplingPoints}` : ''}</small></span><ChevronRight size={14} />
+        </button>)}</div>
+      </section>)}
+    </div>}
+  </div>;
+}
+
+function PrintPage() {
+  const { domain = '', workflow: workflowId = '' } = useParams();
+  const workflow = workflowById(workflowId);
+  const [queue, setQueue] = useState(readPrintQueue);
+  useEffect(() => {
+    const sync = () => setQueue(readPrintQueue());
+    window.addEventListener('anf3:print-queue', sync);
+    return () => window.removeEventListener('anf3:print-queue', sync);
+  }, []);
+  if (!workflow || workflow.domain !== domain) return <Navigate to="/list" replace />;
+  const items = queue.filter((item) => item.domain === domain && item.workflow === workflowId)
+    .map((item) => ({ recordKey: item.recordKey, worksheetNo: item.worksheetNo }));
+  if (!items.length) return <div className="page"><div className="state"><Printer size={20} /><h2>Print queue is empty</h2><Link className="text-link" to={`/records/${domain}/${workflowId}`}>Back to records</Link></div></div>;
+  return <BatchPreview workflow={workflow} items={items} presetMethod={queue.find((item) => item.domain === domain && item.workflow === workflowId)?.cvMethod} onClose={() => window.history.back()} />;
 }
 
 function Workspace({ workflow, initialRecordKey, initialFilters = {}, presetMethod }: { workflow: Workflow; initialRecordKey?: string; initialFilters?: RecordFilters; presetMethod?: string }) {
@@ -1472,7 +1571,17 @@ function Workspace({ workflow, initialRecordKey, initialFilters = {}, presetMeth
             <span>{picked.size ? `${picked.size} selected` : 'Select for printing'}</span>
           </label>
           {picked.size > 0 && <>
-            <button type="button" className="primary" onClick={() => setBatch(true)}>
+            <button type="button" className="primary" onClick={() => {
+              writePrintQueue(scopedItems.filter((item) => picked.has(item.recordKey)).map((item) => ({
+                domain: workflow.domain,
+                workflow: workflow.id,
+                recordKey: item.recordKey,
+                worksheetNo: item.worksheetNo || item.recordId || item.recordKey,
+                scope: initialFilters.building || 'all',
+                cvMethod: workflow.id === 'cv' ? normalizeCvTestMethod(item.testMethod || presetMethod) : undefined
+              })));
+              navigate(`/print/${workflow.domain}/${workflow.id}`);
+            }}>
               <Printer size={14} />Print {picked.size}
             </button>
             <button type="button" onClick={() => setPicked(new Set())}>Clear</button>
@@ -1587,6 +1696,7 @@ function RecordSheet({ workflow, value, fresh, online, presetMethod }: { workflo
 function Actions({ workflow, value, availability, presetMethod }: { workflow: Workflow; value: CachedRecord; availability: ReturnType<typeof pdfAvailability>; presetMethod?: string }) {
   const [pdfId, setPdfId] = useState(''); const [busy, setBusy] = useState(false); const [message, setMessage] = useState('');
   const [viewer, setViewer] = useState(false);
+  const [fillValues, setFillValues] = useState(() => readPrintFill(workflow.domain, workflow.id, value.recordKey));
   const wide = useMedia('(min-width: 68rem)');
   /* The method chosen when the binder was opened wins; the record's own field
      is the fallback, and the radio group below can still override both. */
@@ -1607,7 +1717,18 @@ function Actions({ workflow, value, availability, presetMethod }: { workflow: Wo
     const next = fromBinder !== 'unknown' ? fromBinder : normalizeCvTestMethod(value.record.testMethod || value.record.samplingMethod);
     setMethod(next === 'unknown' ? '' : next);
     setPdfId(''); setMessage(''); setViewer(false);
+    setFillValues(readPrintFill(workflow.domain, workflow.id, value.recordKey));
   }, [value.record, value.record.worksheetNo, value.record.docNo, value.recordKey, presetMethod]);
+
+  const basePayload = route
+    ? documentPayload(route, value.record, value.samples, String(value.record.worksheetNo || value.record.docNo || value.recordKey), method)
+    : {};
+  const fillableKeys = blankPayloadKeys(basePayload);
+  const updateFill = (key: string, next: string) => {
+    const values = { ...fillValues, [key]: next };
+    setFillValues(values);
+    writePrintFill(workflow.domain, workflow.id, value.recordKey, values);
+  };
 
   const generate = async () => {
     setBusy(true); setMessage('');
@@ -1619,7 +1740,7 @@ function Actions({ workflow, value, availability, presetMethod }: { workflow: Wo
           workflow: route,
           worksheetNo: String(value.record.worksheetNo || value.record.docNo || value.recordKey),
           cvContext: workflow.id === 'cv' ? { samplingFamily: cvSamplingFamily(value.record), testMethod: method } : undefined,
-          data: documentPayload(route, value.record, value.samples, String(value.record.worksheetNo || value.record.docNo || value.recordKey), method)
+          data: mergePrintFill(basePayload, fillValues)
         })
       });
       const result = await response.json();
@@ -1698,6 +1819,12 @@ function Actions({ workflow, value, availability, presetMethod }: { workflow: Wo
       </button>}
       {fileActions}
     </div>
+    {fillableKeys.length > 0 && <details className="print-fill">
+      <summary>Optional blank fields for this print (saved on this machine only)</summary>
+      <div className="print-fill-grid">
+        {fillableKeys.map((key) => <label key={key}><span>{key}</span><input value={fillValues[key] || ''} onChange={(event) => updateFill(key, event.target.value)} /></label>)}
+      </div>
+    </details>}
     {rinse && <fieldset className="method">
       <legend>Rinse test method</legend>
       <label><input type="radio" name={`${CV_METHOD_CONTROL_ID}-${value.recordKey}`} value="pour-plate" checked={method === 'pour-plate'} onChange={() => { setMethod('pour-plate'); setPdfId(''); }} />Pour Plate <small>renders on the approved PW/PRW template family</small></label>
@@ -1968,6 +2095,8 @@ const router = createHashRouter([{
     { path: 'records/:domain', element: <DomainPage /> },
     { path: 'records/:domain/:workflow', element: <RecordsPage /> },
     { path: 'records/:domain/:workflow/:recordKey', element: <RecordsPage /> },
+    { path: 'list', element: <ListPage /> },
+    { path: 'print/:domain/:workflow', element: <PrintPage /> },
     { path: 'calendar', element: <CalendarPage /> },
     { path: 'tools', element: <ToolsPage /> },
     { path: 'inventory', element: <InventoryPage /> },

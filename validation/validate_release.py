@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from html.parser import HTMLParser
+import argparse
+import json
 from pathlib import Path
 import re
 import zipfile
@@ -31,6 +33,21 @@ class LinkParser(HTMLParser):
 
 def strip_suffix(value: str) -> str:
     return value.split("?", 1)[0].split("#", 1)[0]
+
+
+def controlled_root() -> Path | None:
+    parser = argparse.ArgumentParser(description="Validate the public source or a controlled ANF3 release package")
+    parser.add_argument(
+        "--controlled-dir",
+        type=Path,
+        help="external release directory containing owner-only documents and DOCX templates",
+    )
+    args = parser.parse_args()
+    if args.controlled_dir is None:
+        return None
+    candidate = args.controlled_dir.expanduser().resolve()
+    assert candidate.is_dir(), f"Controlled release directory does not exist: {candidate}"
+    return candidate
 
 
 def resolve_local_asset(html_file: Path, value: str) -> Path:
@@ -71,11 +88,8 @@ def assert_local_assets() -> None:
     assert not failures, "Broken local assets:\n" + "\n".join(failures)
 
 
-def assert_required_files() -> None:
+def assert_required_files(controlled: Path | None) -> None:
     required = [
-        "OWNER.md",
-        "PLAN.md",
-        "DESIGN.md",
         "START-ANF3.bat",
         "START-SERVER.bat",
         "CREATE-DIST-ZIP.ps1",
@@ -97,21 +111,52 @@ def assert_required_files() -> None:
         "google/app-scripts/RPP2-water-record.gs",
         "google/app-scripts/Testing.gs",
         "google/app-scripts/RPP2-cv-record.gs",
+    ]
+    missing = [value for value in required if not (ROOT / value).is_file()]
+    assert not missing, f"Missing required files: {missing}"
+
+    if controlled is None:
+        return
+
+    controlled_required = [
+        "OWNER.md",
+        "PLAN.md",
+        "DESIGN.md",
+        "inventory_catalog.pdf",
+        "dist/index.html",
+        "VERSION.txt",
+        "config.json",
         "templates/pw-prw-template.docx",
         "templates/wfi-pus-template.docx",
         "templates/ca-template.docx",
         "templates/em-template.docx",
         "templates/cv-contact-template.docx",
     ]
-    missing = [value for value in required if not (ROOT / value).is_file()]
-    assert not missing, f"Missing required files: {missing}"
+    controlled_missing = [value for value in controlled_required if not (controlled / value).is_file()]
+    assert not controlled_missing, f"Controlled release is missing required files: {controlled_missing}"
 
 
-def assert_templates() -> None:
-    for template in (ROOT / "templates").glob("*.docx"):
+def assert_templates(controlled: Path | None) -> None:
+    if controlled is None:
+        print("Public source mode: controlled DOCX template checks skipped; use --controlled-dir for the share package")
+        return
+    for template in (controlled / "templates").glob("*.docx"):
         assert zipfile.is_zipfile(template), f"Invalid DOCX container: {template.name}"
         with zipfile.ZipFile(template) as archive:
             assert "word/document.xml" in archive.namelist(), f"document.xml missing: {template.name}"
+
+    config = controlled / "config.json"
+    try:
+        parsed = json.loads(config.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as error:
+        raise AssertionError(f"Controlled config.json is invalid JSON: {error}") from error
+    for key in ("waterReadUrl", "airReadUrl", "cvReadUrl"):
+        value = str(parsed.get(key) or "").strip()
+        assert not value or re.fullmatch(
+            r"https://script\.google\.com/macros/s/[A-Za-z0-9_-]+/exec", value
+        ), f"Controlled config.json {key} must be blank or a public /exec URL"
+        assert "ANF3_SYNC_TOKEN" not in value and "token" not in value.lower(), \
+            f"Controlled config.json {key} contains a forbidden token"
 
 
 def assert_navigation() -> None:
@@ -246,15 +291,17 @@ def assert_launcher_repairs_venv() -> None:
 
 
 def main() -> None:
-    assert_required_files()
+    controlled = controlled_root()
+    assert_required_files(controlled)
     assert_local_assets()
-    assert_templates()
+    assert_templates(controlled)
     assert_navigation()
     assert_design_gates()
     assert_cv_boundaries()
     assert_endpoint_configuration()
     assert_launcher_repairs_venv()
-    print("Full release structural checks passed")
+    mode = "controlled release" if controlled else "public source"
+    print(f"{mode.capitalize()} structural checks passed")
 
 
 if __name__ == "__main__":

@@ -23,7 +23,7 @@ const endpoints: Record<Domain, string> = {
 };
 
 /**
- * Overrides the compiled-in URLs from `dist/config.json`.
+ * Overrides the compiled-in URLs from the release-root `config.json`.
  *
  * Baking the endpoints into the bundle meant that changing one of them
  * required Node, pnpm and a rebuild — on a laboratory PC that has none of
@@ -43,7 +43,7 @@ export function applyRuntimeConfig(config: unknown) {
   }
 }
 
-/** Reads dist/config.json if it is there. Never throws: a missing or malformed
+/** Reads the release-root config.json if it is there. Never throws: a missing or malformed
  *  file simply leaves the compiled-in values in place. */
 export async function loadRuntimeConfig() {
   try {

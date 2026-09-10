@@ -5,36 +5,24 @@ setlocal EnableExtensions EnableDelayedExpansion
 rem ===========================================================================
 rem  ANF3 Laboratory Records - the one file to double-click
 rem ---------------------------------------------------------------------------
-rem  This workspace is meant to sit on the department share drive so there is
-rem  one copy to update. It must NOT be RUN from there. Three things break when
-rem  several PCs run out of one shared folder:
-rem
-rem    * .venv records an absolute path to the Python it was built from, so it
-rem      only works on the PC that created it. Every other PC decides the
-rem      environment is broken and rebuilds it - deleting the folder out from
-rem      under whoever is using it at the time.
-rem    * activity-log.jsonl and .anf3-port are single files every PC writes to.
-rem      Appends from two machines can tear a line; the port file makes each PC
-rem      believe the others' server is its own.
-rem    * two PCs printing the same worksheet write the same output PDF at the
-rem      same time. That is a controlled document.
-rem
-rem  So: the share drive holds the master copy, each PC gets its own working
-rem  copy under %LOCALAPPDATA%, and this launcher keeps them in step. Run it
-rem  from the share drive and it copies itself down, then hands over. Run it
-rem  from the local copy and it just starts. Update the share drive and the
-rem  next launch refreshes each PC on its own.
+rem  The share drive is the release master. Each PC runs its own copy under
+rem  %LOCALAPPDATA%, so the Python environment, port file, audit log and output
+rem  files are never shared by several laboratory PCs at once.
 rem ===========================================================================
 
 title ANF3 Laboratory Records
 set "APP_DIR=%~dp0"
 set "LOCAL_DIR=%LOCALAPPDATA%\ANF3-Laboratory-Records\"
+set "LOCK_HELD="
+set "FOUND="
 
-rem Already the local working copy? Nothing to sync - just start.
+rem /here is an owner/developer escape hatch. It still uses the local copy;
+rem running the server from a UNC path would put the venv back on the share.
+if /i "%~1"=="/here" (
+  set "APP_DIR=%LOCAL_DIR%"
+  goto :run_here
+)
 if /i "%APP_DIR%"=="%LOCAL_DIR%" goto :run_here
-
-rem The owner can force the old behaviour for a one-off test.
-if /i "%~1"=="/here" goto :run_here
 
 echo.
 echo ANF3 Laboratory Records
@@ -42,95 +30,292 @@ echo   Master copy : %APP_DIR%
 echo   This PC     : %LOCAL_DIR%
 echo.
 
+rem A disconnected or incomplete share must not silently turn into a server
+rem started from the UNC path. A known-good local copy may still be used.
+if not exist "%APP_DIR%VERSION.txt" (
+  echo [ERROR] The ANF3 share-drive release cannot be read.
+  if exist "%LOCAL_DIR%server\pdf_server.py" (
+    echo [INFO] Using the existing local copy. Reconnect the share and retry
+    echo        later to receive release updates.
+    set "APP_DIR=%LOCAL_DIR%"
+    goto :run_here
+  )
+  echo        Check the network connection and the share-drive path.
+  pause
+  exit /b 1
+)
+
 call :read_version "%APP_DIR%VERSION.txt" MASTER_VERSION
 call :read_version "%LOCAL_DIR%VERSION.txt" LOCAL_VERSION
 
-if not exist "%LOCAL_DIR%server\pdf_server.py" (
-  echo [1/2] First run on this PC - copying the workspace across.
-  goto :copy_down
-)
-if not "!MASTER_VERSION!"=="!LOCAL_VERSION!" (
-  echo [1/2] The master copy has been updated ^(!LOCAL_VERSION! -^> !MASTER_VERSION!^) - refreshing this PC.
-  goto :copy_down
+rem Reuse a healthy local service before considering a refresh. Overwriting a
+rem workspace underneath a running Flask/Word process can produce a mixed
+rem release, so an update waits until that service has stopped.
+call :find_server "%LOCAL_DIR%"
+if defined FOUND (
+  if not "!MASTER_VERSION!"=="!LOCAL_VERSION!" (
+    echo [INFO] Release !MASTER_VERSION! is ready, but the current local
+    echo        service is still using !LOCAL_VERSION!.
+    echo        The running service is being reused safely. Close it and
+    echo        double-click START-ANF3.bat again to apply the update.
+  ) else (
+    echo [INFO] ANF3 is already running on port !FOUND!.
+  )
+  goto :open_server
 )
 
-echo [1/2] This PC is already up to date ^(!LOCAL_VERSION!^).
+if not exist "%LOCAL_DIR%server\pdf_server.py" goto :copy_down
+if not "!MASTER_VERSION!"=="!LOCAL_VERSION!" goto :copy_down
 goto :hand_over
 
+rem ---------------------------------------------------------------------------
+rem Copy the release to this PC. The launch lock also covers setup and server
+rem startup, so two people double-clicking at the same time cannot mirror or
+rem rebuild the same local workspace concurrently.
 :copy_down
-rem robocopy handles UNC paths and long file names, which xcopy does not.
-rem   /MIR  make the local copy match the master exactly
-rem   /XD   never copy per-machine state: the environment, the caches, the
-rem         downloaded packages, the generated output, the release archives
-rem   /XF   never copy the per-machine runtime files
-rem Exit codes below 8 are success; 8 and above are real failures.
+call :acquire_lock
+if errorlevel 1 goto :concurrent_launch
+
+call :recorded_port_busy "%LOCAL_DIR%"
+if errorlevel 1 goto :busy_server
+
+echo [1/2] Copying the release to this PC...
 robocopy "%APP_DIR%." "%LOCAL_DIR%." /MIR /NFL /NDL /NJH /NJS /NP /R:1 /W:1 ^
-  /XD ".venv" "node_modules" ".git" ".uv-cache" "pdfs" "words" "release" "shots" "__pycache__" ^
+  /XD ".venv" "node_modules" ".git" ".uv-cache" "pdfs" "words" "release" "shots" "__pycache__" ".anf3-launch.lock" ^
   /XF ".anf3-port" "activity-log.jsonl" "log-forward.json"
 if errorlevel 8 (
+  call :release_lock
   echo.
-  echo [!] Could not copy the workspace to this PC.
-  echo     Check that you can write to: %LOCAL_DIR%
-  echo     Starting from the share drive instead, which is slower and cannot
-  echo     be relied on if several people do it at once.
-  echo.
+  echo [ERROR] The release could not be copied to:
+  echo         %LOCAL_DIR%
+  echo        Check that this PC can write to its local AppData folder and
+  echo        that the share is online, then try again.
   pause
-  goto :run_here
+  exit /b 1
 )
 echo       Copy complete.
+set "APP_DIR=%LOCAL_DIR%"
+goto :run_here_locked
 
 :hand_over
-if not exist "%LOCAL_DIR%.venv\Scripts\python.exe" (
+set "APP_DIR=%LOCAL_DIR%"
+goto :run_here
+
+rem ---------------------------------------------------------------------------
+rem Local execution path. A healthy service is reused; otherwise acquire the
+rem lock, validate the package, prepare Python, start Flask and wait for its
+rem status endpoint before opening the browser.
+:run_here
+call :find_server "%APP_DIR%"
+if defined FOUND goto :open_server
+
+call :recorded_port_busy "%APP_DIR%"
+if errorlevel 1 goto :busy_server
+
+call :acquire_lock
+if errorlevel 1 goto :concurrent_launch
+goto :run_here_locked
+
+:run_here_locked
+call :preflight "%APP_DIR%"
+if errorlevel 1 goto :locked_failure
+
+call :check_converter
+if errorlevel 1 goto :converter_missing
+
+if not exist "%APP_DIR%.venv\Scripts\python.exe" (
   echo [2/2] Setting up the Python environment on this PC ^(one time^)...
   set "ANF3_CALLED_BY_LAUNCHER=1"
-  call "%LOCAL_DIR%INSTALL.bat"
+  call "%APP_DIR%INSTALL.bat"
   set "ANF3_CALLED_BY_LAUNCHER="
-  if errorlevel 1 (
-    echo.
-    echo [!] Setup did not finish. Read the message above, then run this again.
-    pause
-    exit /b 1
-  )
+  if errorlevel 1 goto :setup_failed
 ) else (
   echo [2/2] Starting.
 )
+
 echo.
-call "%LOCAL_DIR%START-ANF3.bat"
-exit /b %errorlevel%
-
-rem ===========================================================================
-rem  Running from the local working copy: find an ANF3 server or start one.
-rem ===========================================================================
-:run_here
-rem The usual port is often taken on a laboratory PC, so the server picks the
-rem next free one and writes it to .anf3-port. Look for an ANF3 server that is
-rem already running - first on whatever port it recorded, then across the range
-rem the server searches - and reuse it instead of starting a second copy.
-set "FOUND="
-
-if exist "%APP_DIR%.anf3-port" (
-  set /p RECORDED=<"%APP_DIR%.anf3-port"
-  if defined RECORDED call :probe !RECORDED!
+echo [INFO] Starting the local ANF3 service...
+set "ANF3_NO_BROWSER=1"
+start "ANF3 Local Server" /min "%APP_DIR%START-SERVER.bat"
+set "ANF3_NO_BROWSER="
+call :wait_for_server
+set "WAIT_CODE=%errorlevel%"
+if "%WAIT_CODE%"=="0" (
+  call :check_server_converter
+  if errorlevel 1 set "WAIT_CODE=2"
 )
+call :release_lock
 
-if not defined FOUND (
-  for /l %%P in (8000,1,8009) do (
-    if not defined FOUND call :probe %%P
+if "%WAIT_CODE%"=="2" (
+  echo.
+  echo [ERROR] The server started, but no Word or LibreOffice PDF converter
+  echo        is available. Install Office support and run this again.
+  pause
+  exit /b 1
+)
+if not "%WAIT_CODE%"=="0" (
+  echo.
+  echo [ERROR] The local ANF3 service did not answer at /api/status.
+  echo        Check the server window for the exact Python or port error.
+  pause
+  exit /b 1
+)
+goto :open_server
+
+rem ---------------------------------------------------------------------------
+:open_server
+echo [INFO] Opening ANF3 at http://127.0.0.1:%FOUND%
+start "" "http://127.0.0.1:%FOUND%"
+exit /b 0
+
+:locked_failure
+call :release_lock
+pause
+exit /b 1
+
+:setup_failed
+call :release_lock
+echo.
+echo [ERROR] Python setup did not finish. Run INSTALL.bat again after checking
+echo        that this folder is writable and the PC can reach the internet.
+pause
+exit /b 1
+
+:converter_missing
+call :release_lock
+echo.
+echo [ERROR] No supported DOCX-to-PDF converter was found on this PC.
+echo        Install Microsoft Word and run INSTALL-MSOFFICE-SUPPORT.bat,
+echo        or install LibreOffice, then run START-ANF3.bat again.
+pause
+exit /b 1
+
+:busy_server
+call :release_lock
+echo.
+echo [ERROR] A process is using the ANF3 port recorded for this PC, but it is
+echo        not answering as ANF3. Close that process or restart the PC, then
+echo        try again. No files were refreshed.
+pause
+exit /b 1
+
+:concurrent_launch
+echo [INFO] Another ANF3 launch is preparing this PC. Waiting briefly...
+for /l %%N in (1,1,15) do (
+  call :find_server "%LOCAL_DIR%"
+  if defined FOUND goto :open_server
+  timeout /t 2 /nobreak >nul
+)
+echo.
+echo [ERROR] The other launch did not finish within 30 seconds.
+echo        Try START-ANF3.bat again after it finishes.
+pause
+exit /b 1
+
+rem ---------------------------------------------------------------------------
+rem Release preflight. Controlled templates are supplied with the share package;
+rem a public source checkout without them must fail clearly before Flask starts.
+:preflight
+set "CHECK_DIR=%~1"
+set "PREFLIGHT_OK=1"
+for %%F in ("dist\index.html" "server\pdf_server.py" "server\requirements.txt" "START-SERVER.bat" "INSTALL.bat" "config.json" "templates\pw-prw-template.docx" "templates\wfi-pus-template.docx" "templates\ca-template.docx" "templates\em-template.docx" "templates\cv-contact-template.docx") do (
+  if not exist "%CHECK_DIR%%%~F" (
+    echo [ERROR] Release file is missing: %CHECK_DIR%%%~F
+    set "PREFLIGHT_OK=0"
   )
 )
+if "%PREFLIGHT_OK%"=="0" goto :preflight_failed
 
-if defined FOUND (
-  echo [INFO] ANF3 is already running on port %FOUND%. Opening the browser.
-  start "" "http://localhost:%FOUND%"
-  exit /b 0
+powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; $cfg=Get-Content -Raw -LiteralPath '%CHECK_DIR%config.json' | ConvertFrom-Json; $forbidden='ANF3'+'_SYNC_'+'TOKEN'; foreach($key in 'waterReadUrl','airReadUrl','cvReadUrl'){ $value=[string]$cfg.$key; if($value -and $value -notmatch '^https://script[.]google[.]com/macros/s/[A-Za-z0-9_-]+/exec$'){ throw ('config.json '+$key+' must be a public Google Apps Script /exec URL or blank') }; if($value -match $forbidden -or $value -match 'token'){ throw ('config.json '+$key+' contains a forbidden token') } }; exit 0" >nul 2>&1
+if errorlevel 1 (
+  echo [ERROR] config.json is invalid or contains a non-public endpoint.
+  echo        Use blank values or public Google Apps Script URLs ending in /exec.
+  goto :preflight_failed
 )
+exit /b 0
 
-call "%APP_DIR%START-SERVER.bat"
+:preflight_failed
+echo.
+echo [ERROR] This ANF3 release is incomplete. Ask the owner to publish dist,
+echo        config.json and all five controlled DOCX templates.
+exit /b 1
+
+rem ---------------------------------------------------------------------------
+rem Detect a converter without launching the Flask service. The server performs
+rem its own detection again, so a newly installed Office/LibreOffice is picked
+rem up after the next launch.
+:check_converter
+powershell -NoProfile -NonInteractive -Command "$word=(Test-Path 'HKCR:\Word.Application') -or [bool](Get-Command 'winword.exe' -ErrorAction SilentlyContinue); $lo=[bool](Get-Command 'soffice.exe' -ErrorAction SilentlyContinue); if(-not $lo){ $lo=(Test-Path 'C:\Program Files\LibreOffice\program\soffice.exe') -or (Test-Path 'C:\Program Files (x86)\LibreOffice\program\soffice.exe') }; if($word -or $lo){ exit 0 }; exit 1" >nul 2>&1
 exit /b %errorlevel%
 
 rem ---------------------------------------------------------------------------
-rem Reads a version stamp into the named variable. Missing file means "unknown",
-rem which never matches a real version, so the copy is refreshed.
+rem Find a healthy ANF3 service on the local copy's recorded port or the full
+rem range used by pdf_server.py when 8000 is busy.
+:find_server
+set "FOUND="
+set "STATE_DIR=%~1"
+if exist "%STATE_DIR%.anf3-port" (
+  set /p RECORDED=<"%STATE_DIR%.anf3-port"
+  if defined RECORDED call :probe !RECORDED!
+)
+if not defined FOUND (
+  for /l %%P in (8000,1,8039) do (
+    if not defined FOUND call :probe %%P
+  )
+)
+exit /b 0
+
+rem A recorded port that is occupied but not ANF3 is a stop condition for a
+rem refresh. It avoids copying files while a stale/foreign process may hold a
+rem file or keep the user pointed at the wrong service.
+:recorded_port_busy
+set "RECORDED="
+if not exist "%~1.anf3-port" exit /b 0
+set /p RECORDED=<"%~1.anf3-port"
+if not defined RECORDED exit /b 0
+call :tcp_port_busy !RECORDED!
+if errorlevel 1 exit /b 0
+exit /b 1
+
+:tcp_port_busy
+powershell -NoProfile -NonInteractive -Command "$client=New-Object Net.Sockets.TcpClient; try { $task=$client.ConnectAsync('127.0.0.1',[int]('%1')); if(-not $task.Wait(500)){ exit 1 }; if($client.Connected){ exit 0 }; exit 1 } catch { exit 1 } finally { $client.Dispose() }" >nul 2>&1
+exit /b %errorlevel%
+
+rem ---------------------------------------------------------------------------
+:wait_for_server
+set "FOUND="
+for /l %%N in (1,1,30) do (
+  for /l %%P in (8000,1,8039) do (
+    if not defined FOUND call :probe %%P
+  )
+  if defined FOUND goto :server_ready
+  timeout /t 1 /nobreak >nul
+)
+exit /b 1
+
+:server_ready
+exit /b 0
+
+:check_server_converter
+powershell -NoProfile -NonInteractive -Command "try { $r=Invoke-RestMethod -TimeoutSec 2 'http://127.0.0.1:%FOUND%/api/status'; if($r.converterAvailable -eq $true){ exit 0 }; exit 1 } catch { exit 1 }" >nul 2>&1
+exit /b %errorlevel%
+
+rem ---------------------------------------------------------------------------
+:acquire_lock
+if not exist "%LOCAL_DIR%" mkdir "%LOCAL_DIR%" >nul 2>&1
+mkdir "%LOCAL_DIR%.anf3-launch.lock" >nul 2>&1
+if errorlevel 1 exit /b 1
+>"%LOCAL_DIR%.anf3-launch.lock\owner.txt" echo %COMPUTERNAME%\%USERNAME% %DATE% %TIME%
+set "LOCK_HELD=1"
+exit /b 0
+
+:release_lock
+if not defined LOCK_HELD exit /b 0
+rmdir /s /q "%LOCAL_DIR%.anf3-launch.lock" >nul 2>&1
+set "LOCK_HELD="
+exit /b 0
+
+rem ---------------------------------------------------------------------------
 :read_version
 set "%~2=none"
 if exist "%~1" (
@@ -141,11 +326,9 @@ if exist "%~1" (
 )
 goto :eof
 
-rem ---------------------------------------------------------------------------
-rem Sets FOUND only when an ANF3 server answers on this port. /api/status is
-rem this application's own route, so another program sitting on the port will
-rem not be mistaken for ours.
+rem /api/status is this application's own route, so another process on the
+rem port is not mistaken for ANF3.
 :probe
-powershell -NoProfile -NonInteractive -Command "try { $r = Invoke-WebRequest -UseBasicParsing -TimeoutSec 2 'http://127.0.0.1:%1/api/status'; if ($r.StatusCode -eq 200) { exit 0 }; exit 1 } catch { exit 1 }" >nul 2>&1
+powershell -NoProfile -NonInteractive -Command "try { $r=Invoke-WebRequest -UseBasicParsing -TimeoutSec 2 'http://127.0.0.1:%1/api/status'; if($r.StatusCode -eq 200){ exit 0 }; exit 1 } catch { exit 1 }" >nul 2>&1
 if not errorlevel 1 set "FOUND=%1"
-goto :eof
+exit /b 0

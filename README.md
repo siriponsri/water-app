@@ -1,155 +1,97 @@
-# ANF3 Laboratory Records
+﻿# ANF3 Laboratory Records
 
-A **read-only** workspace over the Air, Water and Cleaning Validation System
-DB, for the GPO microbiology laboratory. It finds a worksheet, shows what the
-System DB holds, previews it, and prints it from the controlled Word template
-on the operator's own PC.
+A controlled, read-only laboratory records workspace for water, air, compressed-air, and cleaning-validation workflows. ANF3 retrieves authoritative records from Google Sheets through Apps Script, previews them in a local web application, and produces controlled Word and PDF reports from approved templates.
 
-It never writes a record. Records are created, numbered and synchronised only
-in the owner-managed Google Sheets, through bound Apps Script projects.
+![ANF3 logo](design-assets/anf3-logo.svg)
 
+## What ANF3 does
+
+- Searches and reviews laboratory worksheets from the System Database.
+- Supports PW/PRW, WFI/PUS, environmental monitoring, compressed air, CV contact plate, and CV rinse workflows.
+- Keeps the browser read-only; record creation, numbering, and synchronization remain owner-managed in Google Sheets and Apps Script.
+- Fills the authoritative DOCX template, converts it to PDF, and saves both files using the worksheet number.
+- Provides two offline training simulations: The Sixth Plate and Excursion Trace.
+
+## Architecture and workflow
+
+```mermaid
+flowchart LR
+  A[Google Sheets] --> B[Bound Apps Script]
+  B --> C[RPP2 System DB / API]
+  C --> D[React workspace\nread-only + IndexedDB cache]
+  D --> E[Flask document service]
+  E --> F[Approved DOCX template]
+  F --> G[<worksheetNo>.docx]
+  F --> H[<worksheetNo>.pdf]
 ```
-Google Sheets (user sheets)  →  bound Apps Script  →  RPP2 System DB sheets
-                                                            ↓ public read
-                     React workspace (hash router, read-only, IndexedDB cache)
-                                                            ↓ route key only
-                     Flask on this PC  →  controlled .docx → PDF
-```
 
----
+1. **Capture and sync** — Operators create or update records in the owner-managed Google Sheets workflow. Apps Script routes records to the correct building shard and preserves worksheet-number contracts.
+2. **Retrieve** — The frontend requests logical domain data from the API. It does not depend on physical shard names and does not write records.
+3. **Select route** — The record’s `templateFamily`, `sampleMatrix`, and authoritative `testMethod` determine the form and DOCX template. CV rinse routes to Pour Plate or Membrane Filtration from `Test-Method`.
+4. **Review** — The operator checks header fields and sample results in the browser. Missing source values remain blank; values are never invented.
+5. **Generate** — The local Flask service maps record and sample fields to exact placeholders in the approved template, including legacy aliases and page-specific payloads.
+6. **Export** — The filled document is saved as `words/<worksheetNo>.docx` and converted to `pdfs/<worksheetNo>.pdf`. Existing artifacts are compared by normalized content before regeneration.
+7. **Verify** — Confirm that the files open, the PDF matches the DOCX, all expected placeholders are resolved, and multipage records repeat their header fields on every page.
 
-## Where to start
+## Quick start (Windows)
 
-**If you are installing or running it** — in this order:
+### For laboratory operators
 
-| | |
-|---|---|
-| [`START_HERE_BEGINNER_TH.md`](START_HERE_BEGINNER_TH.md) | เริ่มจากศูนย์ อ่านอันนี้ก่อน |
-| [`OWNER_MANUAL.md`](OWNER_MANUAL.md) | คู่มือใช้งานประจำวัน ติดตั้ง เปิด แก้ปัญหา |
-| [`OWNER_DEPLOYMENT.md`](OWNER_DEPLOYMENT.md) | **คัดลอกอะไรไปวางที่ไหน** — 6 สคริปต์ → 6 สเปรดชีต |
-| [`OWNER_SETUP_TH.md`](OWNER_SETUP_TH.md) | ติดตั้ง Apps Script ทีละไฟล์ |
-| [`OWNER.md`](OWNER.md) | คู่มือฉบับเต็ม |
+1. Copy or extract the project folder to the department workstation.
+2. Double-click [`START-ANF3.bat`](START-ANF3.bat). The launcher prepares a local Python environment and starts the application.
+3. Open the printed local URL in a browser.
+4. Search for a worksheet, review it, then choose **Print / Generate document**.
+5. Find the generated files in `words/` and `pdfs/`.
 
-**If you are changing the code**, read in this order:
+Run [`INSTALL-MSOFFICE-SUPPORT.bat`](INSTALL-MSOFFICE-SUPPORT.bat) once when Microsoft Word is the selected DOCX-to-PDF converter.
 
-| | |
-|---|---|
-| [`HANDOFF.md`](HANDOFF.md) | **Read first.** The current state of the tree, what must not be touched, the open items |
-| [`CLAUDE.md`](CLAUDE.md) | The short version: layout, the verify list, the rules that are not negotiable |
-| [`DESIGN.md`](DESIGN.md) | Why every decision was made, version by version |
-| [`PLAN.md`](PLAN.md) | The approved scope |
-| [`docs/`](docs/) | The contracts a gate enforces — see [`docs/README.md`](docs/README.md) |
+### For developers
 
-`PLAN.md`, `DESIGN.md` and `HANDOFF.md` are authoritative for the current
-release. This file is the map, not the specification.
-
----
-
-## Running it on a laboratory PC
-
-**Double-click `START-ANF3.bat`. That is the whole procedure.**
-
-The workspace is meant to live on the department share drive, but it is not
-run from there — the first launch copies it to this PC under
-`%LOCALAPPDATA%\ANF3-Laboratory-Records`, sets up Python once, and starts.
-Afterwards it starts straight away, and refreshes itself whenever `VERSION.txt`
-on the share drive changes.
-
-Running several PCs directly out of one shared folder is what this avoids: the
-Python environment records an absolute path and only works on the PC that
-built it, the activity log and the port file are single files every PC would
-write to, and two PCs printing the same worksheet would write the same output
-PDF at once. See `HANDOFF.md` § "Share drive".
-
-For a PC that will convert Word to PDF with Word itself rather than
-LibreOffice, run `INSTALL-MSOFFICE-SUPPORT.bat` once.
-
-## Running it as a developer
-
-```
+```powershell
 pnpm install
-pnpm dev            # vite on 127.0.0.1:5173, /api proxied to 127.0.0.1:8000
-pnpm build          # emits ./dist, which is what the Flask server serves
+pnpm dev       # Vite at http://127.0.0.1:5173
+pnpm build     # creates dist/
+pnpm check
+pnpm test
 ```
 
-`START-SERVER.bat` runs the Flask side on its own.
+In a second terminal, run [`START-SERVER.bat`](START-SERVER.bat) to start the Flask service on `127.0.0.1:8000`. The Vite development server proxies `/api` to it.
 
----
+## Repository map
 
-## What is in the box
+| Path | Purpose |
+| --- | --- |
+| `apps/web/src/` | Supported React application and workflow logic |
+| `server/` | Flask API, DOCX filling, PDF conversion, activity log |
+| `templates/` | Authoritative controlled Word templates |
+| `google/app-scripts/` | Apps Script synchronization and RPP2 web apps |
+| `validation/` | Contract, security, release, and wiring checks |
+| `docs/` | Architecture and configuration contracts |
+| `words/`, `pdfs/` | Local generated artifacts (do not commit) |
+| `design-assets/` | Brand assets, including the ANF3 logo |
 
-| | |
-|---|---|
-| `apps/web/src/` | The supported React application. `tokens.css` is the locked design system — every colour, space and easing resolves through it |
-| `server/` | Flask: serves the built app, resolves templates, renders PDFs, keeps the activity log |
-| `templates/` | The five controlled Word templates. Nothing generates a document except from one of these |
-| `google/app-scripts/` | The six `.gs` files used for deployment; `RPP2-*.gs` are the three System DB web apps |
-| `validation/` | The gates. Everything below must pass before a release |
-| `docs/` | Contracts and design history — [`docs/README.md`](docs/README.md) |
-| `pw-prw/` `wfi-pus/` `compressed-air/` `em-air/` `cv/` `games/` | Frozen legacy direct-URL pages, hash-checked, not linked from the React workspace. Do not edit |
+## Verification before release
 
-## The two training simulations
-
-Offline, deterministic, fictional, and **not an approval tool**.
-
-- **The Sixth Plate** — 9 microbial identification cases: form several
-  hypotheses, choose media that separate them, record before interpreting, and
-  claim only what the media can support.
-- **Excursion Trace** — 7 cleanroom rounds: flag the readings that genuinely
-  exceed their limit (Feller-corrected for active air), reconstruct the
-  likeliest ingress path, choose a CAPA that fixes the cause.
-
-Three levels change the rules, not just a label — beginner for new staff,
-review (the default) for experienced staff, expert. See `HANDOFF.md` § 3.
-
-A third simulation, CultureCheck, was **removed in v7.1n**: it shared six of
-its nine phases with The Sixth Plate. The frozen legacy page at
-`games/growth-promotion.html` is a different artefact and is untouched.
-
----
-
-## Verify before you ship
-
-Every one of these must pass:
-
-```
-pnpm check && pnpm test && pnpm build
-python3 -m pytest server/tests
-node validation/test_apps_script_security.mjs
+```powershell
+pnpm check
+pnpm test
+pnpm build
+python -m pytest server/tests
 node validation/test_cv_contract.mjs
-node validation/test_games.mjs
 node validation/test_worksheet_numbering.mjs
-node validation/validate_non_game_contract.mjs
-node validation/validate_launchers.mjs
-node validation/validate_styles.mjs
-node validation/contrast.mjs
-python3 validation/validate_cv_package.py
-python3 validation/validate_release.py
-node validation/validate_wiring.mjs --built
+python validation/validate_release.py
 ```
 
-Plus, with a server running, the interaction guard — it needs a real browser
-so it is not in the list above:
+Use `docs/GOAL.md` for the complete release checklist, browser interaction checks, and share-drive acceptance criteria.
 
-```
-node validation/validate_interaction.mjs
-```
+## Data and safety rules
 
-## The rules that are not negotiable
+- The browser never mutates the System DB.
+- Preserve worksheet numbers, `samplesJson`, exact placeholder spelling, and legacy aliases.
+- Use the worksheet number as the external document identity.
+- Do not fabricate results, tags, lots, equipment IDs, dates, or approvals.
+- Do not commit credentials, production exports, or generated DOCX/PDF files.
 
-1. **The browser never writes a record.** If a change would let it mutate the
-   System DB, stop and ask.
-2. **Restrict mutation endpoints.** The Apps Script deployment has no shared
-   sync token, so each System Web App must use the narrowest viable Google
-   Workspace access scope.
-3. **Binder colour means a building.** Never decorative, never reuse the
-   reserve pink, never invent a record count.
-4. **The operator identity is attribution, not authentication.** Nothing
-   verifies the name or the code and no endpoint checks it. It must never be
-   described as a login or as a 21 CFR Part 11 signature.
-5. **The training simulations are fictional.** Keep the boundary language
-   wherever a limit or a grade is shown.
-6. **Ask before touching** `server/`, `apps-script*/`, `templates/`, or the
-   frozen legacy pages.
+## License and operational ownership
 
-`CLAUDE.md` carries the full list with the reasoning.
+This repository is an internal laboratory application. Deployment configuration, Apps Script projects, templates, and production Sheets remain under the laboratory owner’s change control.

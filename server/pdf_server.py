@@ -99,6 +99,8 @@ WINDOWS_DEVICE_NAMES = {
     *(f'LPT{number}' for number in range(1, 10))
 }
 CONVERSION_LOCK = threading.Lock()
+DOCUMENT_GENERATION_LOCK = threading.Lock()
+TEMPLATE_HASH_CACHE = {}
 
 # Form type folders
 FORM_FOLDERS = [
@@ -424,10 +426,15 @@ def _apply_replacements(content, data):
         full_text = re.sub(r'\s+&gt;', '&gt;', full_text)
         original = full_text
         for key, value in data.items():
-            pattern = tag_format.format(key)
-            if pattern in full_text:
-                full_text = full_text.replace(pattern, str(value) if value else '')
-                replaced_count += 1
+            patterns = [tag_format.format(key)]
+            escaped_pattern = f'&lt;{key}&gt;'
+            if escaped_pattern not in patterns:
+                patterns.append(escaped_pattern)
+            for pattern in patterns:
+                if pattern in full_text:
+                    full_text = full_text.replace(pattern, str(value) if value else '')
+                    replaced_count += 1
+                    break
         if full_text == original:
             return section
         first_done = [False]
@@ -529,11 +536,6 @@ def replace_placeholders_in_file(template_path, output_path, data):
         with zipfile.ZipFile(template_path, 'r') as zip_ref:
             zip_ref.extractall(temp_dir)
         
-        # Read document.xml
-        doc_xml_path = os.path.join(temp_dir, 'word', 'document.xml')
-        with open(doc_xml_path, 'r', encoding='utf-8') as f:
-            content = f.read()
-        
         replaced_count = 0
         
         def process_section(match, tag_format):
@@ -558,10 +560,15 @@ def replace_placeholders_in_file(template_path, output_path, data):
             # Replace tags - empty tags get cleared completely
             for key, value in data.items():
                 replacement = str(value) if value else ''  # Empty value = clear tag
-                pattern = tag_format.format(key)
-                if pattern in full_text:
-                    full_text = full_text.replace(pattern, replacement)
-                    replaced_count += 1
+                patterns = [tag_format.format(key)]
+                escaped_pattern = f'&lt;{key}&gt;'
+                if escaped_pattern not in patterns:
+                    patterns.append(escaped_pattern)
+                for pattern in patterns:
+                    if pattern in full_text:
+                        full_text = full_text.replace(pattern, replacement)
+                        replaced_count += 1
+                        break
             
             if full_text == original:
                 return section
@@ -577,31 +584,43 @@ def replace_placeholders_in_file(template_path, output_path, data):
             
             return re.sub(t_pattern, replacer, section)
         
-        # Process text boxes
-        content = re.sub(
-            r'<w:txbxContent>.*?</w:txbxContent>',
-            lambda m: process_section(m, '&lt;{}&gt;'),
-            content,
-            flags=re.DOTALL
-        )
-        
-        # Process paragraphs
-        content = re.sub(
-            r'<w:p\b[^>]*>.*?</w:p>',
-            lambda m: process_section(m, '<{}>'),
-            content,
-            flags=re.DOTALL
-        )
+        # Process document, headers, footers and other Word XML parts. Some
+        # controlled templates keep record-level fields in a header/footer;
+        # leaving those parts untouched would pass the body-only replacement
+        # but still ship literal placeholders in the generated DOCX.
+        word_dir = os.path.join(temp_dir, 'word')
+        xml_paths = []
+        for root, _dirs, files in os.walk(word_dir):
+            xml_paths.extend(
+                os.path.join(root, name)
+                for name in files
+                if name.endswith('.xml')
+            )
+        for xml_path in xml_paths:
+            with open(xml_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+
+            content = re.sub(
+                r'<w:txbxContent>.*?</w:txbxContent>',
+                lambda m: process_section(m, '&lt;{}&gt;'),
+                content,
+                flags=re.DOTALL
+            )
+            content = re.sub(
+                r'<w:p\b[^>]*>.*?</w:p>',
+                lambda m: process_section(m, '<{}>'),
+                content,
+                flags=re.DOTALL
+            )
+
+            with open(xml_path, 'w', encoding='utf-8') as f:
+                f.write(content)
         
         print(f"[DEBUG] Total replacements: {replaced_count}")
         
         # Ensure output directory exists
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
-        
-        # Write back
-        with open(doc_xml_path, 'w', encoding='utf-8') as f:
-            f.write(content)
-        
+
         # Re-zip
         with zipfile.ZipFile(output_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
             for root, dirs, files in os.walk(temp_dir):
@@ -854,11 +873,62 @@ def _validate_pdf_route(workflow, payload, document_data):
 
 
 def _hash_file(path):
+    try:
+        stat = os.stat(path)
+        stamp = (stat.st_mtime_ns, stat.st_size)
+        cached = TEMPLATE_HASH_CACHE.get(path)
+        if cached and cached[0] == stamp:
+            return cached[1]
+    except OSError:
+        stamp = None
     digest = hashlib.sha256()
     with open(path, 'rb') as source:
         for chunk in iter(lambda: source.read(1024 * 1024), b''):
             digest.update(chunk)
-    return digest.hexdigest()
+    result = digest.hexdigest()
+    if stamp is not None:
+        TEMPLATE_HASH_CACHE[path] = (stamp, result)
+    return result
+
+
+def _unresolved_placeholders(path):
+    """Return literal placeholders left in any generated Word XML part."""
+    try:
+        with zipfile.ZipFile(path) as archive:
+            xml_parts = [
+                name for name in archive.namelist()
+                if name.startswith('word/') and name.endswith('.xml')
+            ]
+            if 'word/document.xml' not in xml_parts:
+                return ['document.xml unavailable']
+            contents = [archive.read(name).decode('utf-8') for name in xml_parts]
+    except (OSError, KeyError, zipfile.BadZipFile, UnicodeDecodeError):
+        return ['document.xml unavailable']
+
+    text = re.sub(r'<[^>]+>', '', '\n'.join(contents))
+    placeholders = re.findall(r'<[A-Za-z][A-Za-z0-9 ]*>', text)
+    placeholders.extend(re.findall(r'&lt;([A-Za-z][A-Za-z0-9 ]*)&gt;', text))
+    return sorted(set(placeholders))
+
+
+def _worksheet_artifact_conflict(workflow, worksheet_no, pdf_id):
+    """Find an existing worksheet artifact generated from different content."""
+    folder = os.path.join(PDFS_DIR, workflow)
+    if not os.path.isdir(folder):
+        return False
+    for name in os.listdir(folder):
+        if not name.endswith('.json'):
+            continue
+        try:
+            with open(os.path.join(folder, name), encoding='utf-8') as source:
+                metadata = json.load(source)
+        except (OSError, ValueError):
+            continue
+        if (metadata.get('status') == 'ready' and
+                metadata.get('filename') == f'{worksheet_no}.pdf' and
+                metadata.get('pdfId') != pdf_id):
+            return True
+    return False
 
 
 def _pdf_paths(workflow, pdf_id):
@@ -976,6 +1046,19 @@ def create_pdf():
     if not isinstance(document_data, dict):
         return _json_error('data must be an object', 400)
 
+    capacities = {
+        'pw-prw': 30, 'wfi-pus': 30, 'compressed-air': 10, 'em-air': 50,
+        'cleaning-validation-contact': 10,
+        'cleaning-validation-rinse-pour': 30,
+        'cleaning-validation-rinse-membrane': 30,
+    }
+    try:
+        sample_count = int(document_data.get('sampleCount', 0) or 0)
+    except (TypeError, ValueError):
+        sample_count = 0
+    if sample_count > capacities.get(workflow, 0) and not pages:
+        return _json_error('Record exceeds the approved template capacity; split it into pages before generating', 422)
+
     try:
         _validate_pdf_route(workflow, payload, document_data)
     except ValueError as error:
@@ -1005,40 +1088,55 @@ def create_pdf():
     # is always the worksheet number.
     word_path = os.path.join(word_folder, f'{worksheet_no}.docx')
 
-    if os.path.isfile(pdf_path) and os.path.isfile(metadata_path):
-        return jsonify({'pdfId': pdf_id, 'status': 'ready', 'cached': True})
+    # The worksheet identity is user-facing and must never be silently
+    # overwritten by two concurrent requests. Serialize the identity check,
+    # DOCX write, conversion and metadata commit as one local transaction.
+    with DOCUMENT_GENERATION_LOCK:
+        if _worksheet_artifact_conflict(workflow, worksheet_no, pdf_id):
+            return _json_error('Worksheet already has a generated document with different content; controlled regeneration is required', 409)
 
-    try:
-        if pages:
-            sanitized_pages = [sanitize_data_for_xml(page) for page in pages]
-            build_multipage_docx(template_path, word_path, sanitized_pages)
-        else:
-            replace_placeholders_in_file(template_path, word_path, document_data)
-        success, converter, error = convert_to_pdf(word_path, pdf_path)
-        if not success or not os.path.isfile(pdf_path):
-            print(f'[ERROR] PDF conversion failed: {error or "unknown error"}')
-            return _json_error('PDF conversion failed', 503)
-        metadata = {
-            'pdfId': pdf_id,
-            'status': 'ready',
-            'workflow': workflow,
-            'filename': f'{worksheet_no}.pdf',
-            'templateHash': template_hash,
-            'templateOwner': PDF_WORKFLOW_REGISTRY[workflow]['owner'],
-            'templateFamily': PDF_WORKFLOW_REGISTRY[workflow]['family'],
-            'sourceWorkflow': PDF_WORKFLOW_REGISTRY[workflow].get('sourceWorkflow'),
-            'converter': converter
-        }
-        temp_metadata = metadata_path + '.tmp'
-        with open(temp_metadata, 'w', encoding='utf-8') as target:
-            json.dump(metadata, target, ensure_ascii=False, sort_keys=True)
-        os.replace(temp_metadata, metadata_path)
-        return jsonify({'pdfId': pdf_id, 'status': 'ready', 'cached': False}), 201
-    except (OSError, ValueError, zipfile.BadZipFile) as error:
-        print(f'[ERROR] PDF generation failed: {error}')
-        return _json_error('PDF generation failed', 500)
-    finally:
-        pass
+        # A metadata/PDF cache entry without its worksheet DOCX is incomplete;
+        # regenerate the pair instead of reporting a false cache hit.
+        if (os.path.isfile(pdf_path) and os.path.isfile(metadata_path) and
+                os.path.isfile(word_path)):
+            return jsonify({'pdfId': pdf_id, 'status': 'ready', 'cached': True})
+
+        try:
+            if pages:
+                sanitized_pages = [sanitize_data_for_xml(page) for page in pages]
+                build_multipage_docx(template_path, word_path, sanitized_pages)
+            else:
+                replace_placeholders_in_file(template_path, word_path, document_data)
+            unresolved = _unresolved_placeholders(word_path)
+            if unresolved:
+                try:
+                    os.remove(word_path)
+                except OSError:
+                    pass
+                return _json_error('Generated DOCX contains unresolved placeholders', 500)
+            success, converter, error = convert_to_pdf(word_path, pdf_path)
+            if not success or not os.path.isfile(pdf_path):
+                print(f'[ERROR] PDF conversion failed: {error or "unknown error"}')
+                return _json_error('PDF conversion failed', 503)
+            metadata = {
+                'pdfId': pdf_id,
+                'status': 'ready',
+                'workflow': workflow,
+                'filename': f'{worksheet_no}.pdf',
+                'templateHash': template_hash,
+                'templateOwner': PDF_WORKFLOW_REGISTRY[workflow]['owner'],
+                'templateFamily': PDF_WORKFLOW_REGISTRY[workflow]['family'],
+                'sourceWorkflow': PDF_WORKFLOW_REGISTRY[workflow].get('sourceWorkflow'),
+                'converter': converter
+            }
+            temp_metadata = metadata_path + '.tmp'
+            with open(temp_metadata, 'w', encoding='utf-8') as target:
+                json.dump(metadata, target, ensure_ascii=False, sort_keys=True)
+            os.replace(temp_metadata, metadata_path)
+            return jsonify({'pdfId': pdf_id, 'status': 'ready', 'cached': False}), 201
+        except (OSError, ValueError, zipfile.BadZipFile) as error:
+            print(f'[ERROR] PDF generation failed: {error}')
+            return _json_error('PDF generation failed', 500)
 
 
 @app.route('/api/pdfs/<pdf_id>', methods=['GET'])
@@ -1470,7 +1568,8 @@ if __name__ == '__main__':
     print("=" * 60)
     print()
 
-    threading.Timer(1.0, lambda: webbrowser.open(url)).start()
+    if not os.environ.get('ANF3_NO_BROWSER'):
+        threading.Timer(1.0, lambda: webbrowser.open(url)).start()
     try:
         app.run(host=host, port=port, debug=False)
     finally:

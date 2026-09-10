@@ -133,6 +133,7 @@ export function documentPayload(workflow: string, record: RecordData, samples: R
     payload.samplingFamily = text(record.samplingFamily || record.sampleMatrix);
   }
   const rows = samplesOf(record, samples);
+  payload.sampleCount = String(rows.length);
   /* The floor the room is on. Record-level when it is set, otherwise taken
      from the first sample, which is where the source sheet carries it — the
      same derivation as `js/print-em-air.js:363`. Unfilled until now, so the EM

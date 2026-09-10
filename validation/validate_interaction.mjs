@@ -21,9 +21,10 @@
       rendering, which would otherwise demote within seconds.
    ========================================================================= */
 import { chromium } from 'playwright';
-const b = await chromium.launch({ executablePath: '/opt/pw-browsers/chromium' });
+const browserPath = process.env.ANF3_BROWSER_PATH || chromium.executablePath();
+const b = await chromium.launch({ executablePath: browserPath });
 const ctx = await b.newContext({ viewport:{width:1440,height:900} });
-await ctx.addInitScript(()=>{ try{ localStorage.setItem('anf3.operator.v2', JSON.stringify({name:'สมชาย ใจดี',code:'4417'})); }catch{} });
+await ctx.addInitScript(()=>{ try{ localStorage.setItem('anf3.operator.v2', JSON.stringify({name:'สมชาย ใจดี',code:'4417'})); Object.defineProperty(navigator, 'onLine', { configurable: true, get: () => sessionStorage.getItem('anf3-validation-offline') !== '1' }); }catch{} });
 const p = await ctx.newPage();
 await p.goto('http://127.0.0.1:8000/#/records/water/pw-prw', { waitUntil:'domcontentloaded' });
 await p.evaluate(async () => {
@@ -37,7 +38,11 @@ await p.evaluate(async () => {
   await put('searchPages',{id:'pw-prw',fetchedAt:new Date().toISOString(),
     items:['WT-25-0001','WT-25-0002','WT-25-0003'].map(no=>({recordKey:no,worksheetNo:no,recordId:no,title:no,building:'Building 10'}))});
 });
+await p.evaluate(() => { sessionStorage.setItem('anf3-validation-offline', '1'); window.dispatchEvent(new Event('offline')); });
 await p.reload({ waitUntil:'domcontentloaded' }); await p.waitForTimeout(1500);
+const cachedDialog = p.getByRole('alertdialog', { name: 'No internet connection' });
+if (await cachedDialog.isVisible()) await cachedDialog.getByRole('button', { name: 'Read cached' }).click();
+await p.locator('.hit').first().waitFor({ state: 'visible', timeout: 10000 });
 
 // tick two rows, then open a record — the ticks must survive
 await p.locator('.hit input[type=checkbox]').nth(0).check();
@@ -52,6 +57,8 @@ const fail = [];
 if (after !== before) fail.push('selection lost on navigation');
 else console.log('OK — selection survived');
 
+await p.evaluate(() => { sessionStorage.removeItem('anf3-validation-offline'); window.dispatchEvent(new Event('online')); });
+await p.waitForTimeout(300);
 
 await p.goto('http://127.0.0.1:8000/#/settings', { waitUntil: 'domcontentloaded' });
 await p.waitForTimeout(1200);

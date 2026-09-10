@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 from html.parser import HTMLParser
 from pathlib import Path
 from urllib.parse import urlparse
@@ -9,6 +10,21 @@ import re
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def controlled_root() -> Path | None:
+    parser = argparse.ArgumentParser(description="Validate public CV source or controlled CV assets")
+    parser.add_argument(
+        "--controlled-dir",
+        type=Path,
+        help="external release directory containing the controlled CV template",
+    )
+    args = parser.parse_args()
+    if args.controlled_dir is None:
+        return None
+    candidate = args.controlled_dir.expanduser().resolve()
+    assert candidate.is_dir(), f"Controlled release directory does not exist: {candidate}"
+    return candidate
 
 
 class ResourceParser(HTMLParser):
@@ -40,9 +56,12 @@ def validate_html() -> None:
             assert target.exists(), f'{html_path}: missing resource {resource}'
 
 
-def validate_template() -> None:
-    template = ROOT / 'templates' / 'cv-contact-template.docx'
-    assert template.exists(), 'Missing cv-contact-template.docx'
+def validate_template(controlled: Path | None) -> None:
+    if controlled is None:
+        print('Public source mode: controlled CV template check skipped; use --controlled-dir for the share package')
+        return
+    template = controlled / 'templates' / 'cv-contact-template.docx'
+    assert template.exists(), 'Missing controlled cv-contact-template.docx'
     with zipfile.ZipFile(template) as archive:
         xml = archive.read('word/document.xml')
     document = ElementTree.fromstring(xml)
@@ -73,7 +92,9 @@ def validate_contract_markers() -> None:
 
 
 if __name__ == '__main__':
+    controlled = controlled_root()
     validate_html()
-    validate_template()
+    validate_template(controlled)
     validate_contract_markers()
-    print('CV package structural checks passed')
+    mode = 'controlled release' if controlled else 'public source'
+    print(f'{mode.capitalize()} CV package structural checks passed')
