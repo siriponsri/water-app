@@ -1,7 +1,29 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import vm from 'node:vm';
 
 const read = (path) => readFileSync(new URL(`../${path}`, import.meta.url), 'utf8');
+
+function extractFunction(source, name) {
+  const start = source.indexOf(`function ${name}(`);
+  assert.notEqual(start, -1, `${name} exists`);
+  const open = source.indexOf('{', start);
+  let depth = 0;
+  for (let index = open; index < source.length; index += 1) {
+    if (source[index] === '{') depth += 1;
+    if (source[index] === '}' && --depth === 0) return source.slice(start, index + 1);
+  }
+  throw new Error(`${name} has an unterminated body`);
+}
+
+function loadBuildingMatcher(source, prefix) {
+  const names = [`${prefix}FilterValues_`, `${prefix}Token_`, `${prefix}BuildingMatches_`];
+  const context = {};
+  const code = names.map((name) => extractFunction(source, name)).join('\n')
+    + `\nthis.matcher = ${prefix}BuildingMatches_;`;
+  vm.runInNewContext(code, context);
+  return context.matcher;
+}
 
 const projects = {
   air: {
@@ -44,6 +66,16 @@ assert.doesNotMatch(projects.cv.system, /records_cv_samples/, 'CV stores samples
 assert.match(projects.cv.system, /prefix[\s\S]{0,120}CVR|CVR-YY/, 'CV rinse uses CVR prefix');
 assert.match(projects.air.system, /Legacy backup records are read-only/, 'Air protects legacy backup');
 assert.match(projects.water.system, /Legacy backup records are read-only/, 'Water protects legacy backup');
+
+for (const [domain, prefix] of [['air', 'air'], ['water', 'water']]) {
+  const matches = loadBuildingMatcher(projects[domain].system, prefix);
+  assert.equal(matches('Building 10', 'Other'), false, `${domain} Other excludes Building 10`);
+  assert.equal(matches('Building 12', 'Other'), false, `${domain} Other excludes Building 12`);
+  assert.equal(matches('Building 16', 'Other'), false, `${domain} Other excludes Building 16`);
+  assert.equal(matches('Building 11', 'Other'), true, `${domain} Other keeps Building 11`);
+  assert.equal(matches('Building 19', 'Other'), true, `${domain} Other keeps Building 19`);
+  assert.equal(matches('OSD-PW (Building 10)', 'Other'), true, `${domain} preserves unknown source text in Other`);
+}
 
 const legacyPrintFiles = [
   'js/print-pw-prw.js',

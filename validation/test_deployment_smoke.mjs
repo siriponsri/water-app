@@ -44,6 +44,18 @@ const mixedBuilding = structuredClone(fixture);
 mixedBuilding.water['pw-prw']['Building 10'][0].data.items[0].building = 'Building 12';
 await mustFail(mixedBuilding, 'received mixed building');
 
+const multipleFailures = structuredClone(fixture);
+multipleFailures.water['pw-prw'].Other[0].data.items[0].building = 'Building 12';
+multipleFailures.air['em-air'].Other[0].data.items[0].building = 'Building 10';
+const aggregateLogs = [];
+await mustFail(
+  () => runDeploymentSmoke({ fixture: multipleFailures, continueOnError: true, log: (message) => aggregateLogs.push(message) }),
+  'Deployment smoke failed for 2 scope(s)'
+);
+if (!aggregateLogs.some((message) => message.includes('PASS cv Building 16'))) {
+  throw new Error('continueOnError did not inspect scopes after an earlier failure');
+}
+
 const preservedOtherText = structuredClone(fixture);
 preservedOtherText.water['pw-prw'].Other[0].data.items[0].building = 'Building 19, OSD-PW (Building 10)';
 await runDeploymentSmoke({ fixture: preservedOtherText, log: silent });

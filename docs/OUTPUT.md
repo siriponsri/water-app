@@ -4,8 +4,8 @@ Date: 2026-09-11
 Implementer: Luna / implementation session
 Branch: `main`
 Remote: `origin/main`
-Base commit before this validation refresh: `27dc6cb`
-Status: `IMPLEMENTATION_COMPLETE` for the local source checkout; live deployment acceptance is `BLOCKED` by a read-only Water building-isolation failure.
+Base commit before this validation refresh: `f2bb2bc`
+Status: `IMPLEMENTATION_COMPLETE` for the local source checkout; live deployment acceptance is `BLOCKED` by read-only Water/Air `Other` building-isolation failures.
 
 This document is the handoff to the planner and auditor session. It records the implementation, the commands actually executed, the evidence obtained, and the checks that still require controlled assets or external systems. This update also records the final portable browser-validation fixes completed after the previous handoff.
 
@@ -17,13 +17,13 @@ The changes harden the supported share-drive release path, protect the local DOC
 
 No production Google Sheet, Apps Script deployment, controlled template, or owner-only document was modified. A live endpoint was queried read-only for smoke validation and returned a building-isolation failure documented below.
 
-The local automated gate is complete. Final release acceptance remains blocked until the deployed Water endpoint is corrected and the Owner-controlled target-machine gates are run.
+The local automated gate is complete. Final release acceptance remains blocked until the corrected Water/Air endpoints are deployed and the Owner-controlled target-machine gates are run.
 
 ## VALIDATION REFRESH (2026-09-11)
 
 The repeatable local gate is `validation/run_local_validation.mjs`. With the current-worktree PDF service on port `8011`, it produced `23 PASS`, `0 FAIL`, and `3 NOT_TESTED`, with `deterministicLocalPass=true`. The report contains `VERIFIED_BY_REPOSITORY_INSPECTION`, `VERIFIED_BY_EXECUTION`, and `NOT_TESTED` evidence classes. The three informational checks are live Apps Script deployment, copied installed release, and Owner visual sign-off; they are never converted into local PASS results.
 
-The read-only live smoke then found that Water `pw-prw` with `building=Other` returned a `Building 12` item. The checked-in source excludes that building from `Other`, so this is a deployed revision/configuration mismatch. No production change was attempted.
+The read-only aggregate smoke completed all scopes and found four failures: Water `pw-prw` and `wfi-pus`, plus Air `em-air` and `compressed-air`, all under `building=Other`. The live response included B10/B12/B16 values. Root cause analysis found a double-escaped whitespace regex in the checked-in Water/Air Apps Script tokenizers; that source defect is now fixed and covered by executable matcher tests. The live deployment still needs the corrected source; no production change was attempted.
 
 ## FILES CHANGED
 

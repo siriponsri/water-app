@@ -13,7 +13,7 @@
 ## Commit / Branch
 
 - Branch: `main`
-- Current repository commit at validation start: `27dc6cb`
+- Current repository commit at validation start: `f2bb2bc`
 - `origin/main` matched the local commit before this handoff.
 - Product changes were present in a mixed staged/unstaged working tree during validation; the final release snapshot must include the complete reviewed diff, not only the staged index.
 - Runtime coordination files, `OVERNIGHT_LUNA.md`, the temporary `luna-overnight.log`, and ignored generated outputs are not release artifacts.
@@ -49,7 +49,7 @@ The browser gate covered all seven print routes plus Fill-in-before-Generate, no
 
 ## Verified by Inspection
 
-- The active Apps Script source excludes Building 10/12/16 from logical `Other` matching at `google/app-scripts/RPP2-water-record.gs:826`.
+- The active Water and Air Apps Script source normalizes building text before matching: `google/app-scripts/RPP2-water-record.gs:817` and `google/app-scripts/RPP2-air-record.gs:737`; their `Other` matchers are at lines `826` and `746`.
 - The local deployment validator uses complete building-token matching, rejects mixed-building responses, enforces cursor termination, validates the success envelope/meta in live mode, and accepts only strict HTTPS Google Apps Script `/exec` URLs.
 - The frontend keeps logical domain/building requests and defensively filters returned summaries before display.
 - Legacy aliases and blank-missing-value behavior remain internal compatibility contracts; user-facing screens do not expose raw placeholder or payload-key names.
@@ -57,8 +57,8 @@ The browser gate covered all seven print routes plus Fill-in-before-Generate, no
 
 ## Defects Found
 
-- **Blocking live deployment mismatch:** read-only Water `pw-prw` with `building=Other` returned at least one item whose building was `Building 12`. This contradicts the checked-in Apps Script filter and fails the building-isolation acceptance criterion.
-- The live smoke stopped at that failure, so complete live traversal and live cursor termination were not proven for all remaining Water cases.
+- **Root cause fixed in source:** Water and Air used `[\\s_.-]+` in their active token regexes, so spaces were not normalized and ordinary `Building 10/12/16` values were classified as `Other`.
+- **Blocking live deployment mismatch:** after the source fix, the deployed read-only aggregate smoke still failed four `Other` scopes: Water `pw-prw`, Water `wfi-pus`, Air `em-air`, and Air `compressed-air`. Building-specific scopes passed; all CV scopes passed.
 - An installed/copy-down launch and Owner visual sign-off were not executed in this environment.
 
 ## Defects Fixed
@@ -69,19 +69,22 @@ The browser gate covered all seven print routes plus Fill-in-before-Generate, no
 - Added capacity-aware self-contained React document pages and over-capacity regression coverage.
 - Added populated seven-route DOCX/PDF validation and all-route browser smoke.
 - Added strict deployment URL, cursor, building-isolation, and CV fixture coverage.
+- Corrected the double-escaped Water/Air building-token regex and added executable source-matcher regression checks for B10/B12/B16 versus B11/B19/unknown `Other` values.
+- Changed live smoke to continue through every domain/building scope and aggregate all failures before exiting non-zero.
 - Added rollback cleanup fault coverage for remove/unlink failure paths.
-- Preserved the real live mismatch as a release blocker; no production code or data was changed to hide it.
+- Preserved the still-stale live deployment as a release blocker; no production code or data was changed from this session.
 
 ## Tests Passed / Failed
 
 - Passed: the complete deterministic local gate, `23` checks.
 - Passed: all focused frontend, server, launcher, mapping, routing, artifact, browser, and static contract checks listed above.
-- Failed: live Water `pw-prw` `Other` building-isolation check; the observed live response included `Building 12`.
-- Not a local implementation failure: the live mismatch requires Owner-controlled Apps Script deployment/version investigation.
+- Passed: source-level Water/Air matcher regression checks prove B10/B12/B16 are excluded from `Other`.
+- Failed: live `Other` building-isolation for Water `pw-prw`, Water `wfi-pus`, Air `em-air`, and Air `compressed-air`; the response included B10/B12/B16 values in `Other` scopes.
+- Not a local implementation failure after the source fix: the live endpoint must receive this exact Apps Script source through an Owner-controlled deployment.
 
 ## Not Tested
 
-- Actual Apps Script New Version deployment or redeployment.
+- Apps Script New Version deployment of the corrected source after this validation run.
 - Approved non-production Sheets end-to-end data validation.
 - Target laboratory PC copy-down and first launch through `START-ANF3.bat`.
 - Interactive target-PC converter/Word/LibreOffice behavior and clean-PC/UNC launch.
@@ -91,21 +94,22 @@ The browser gate covered all seven print routes plus Fill-in-before-Generate, no
 ## Production Read-Only Smoke
 
 - Only read-only GET search requests were used; no record, Sheet, deployment, permission, or external document was mutated.
-- Water WFI, Air EM, Air Compressed Air, and CV spot responses were schema-valid with the expected domain/workflow metadata and matching records where reached.
-- Water pagination advanced from cursor `MQ` to `Mg` during the observed read-only run.
-- Water `pw-prw` `Other` failed isolation because a `Building 12` item was returned. This is evidence of a deployed-code/configuration mismatch, not permission to deploy or edit Production.
-- Required Owner action: inspect the deployed Water `/exec` revision and deploy the checked-in source as a new version if appropriate, then rerun the same read-only smoke command. Do not treat the local fixture PASS as live deployment proof.
+- Water B10/B12/B16 scopes, Air B10/B12/B16 scopes, and all CV scopes passed schema/building checks; the aggregate run completed every scope.
+- Water WFI pagination advanced through a cursor before its `Other` isolation failure; the validator now records all later route results instead of stopping at the first failure.
+- Four `Other` scopes failed because B10/B12/B16 records crossed the logical `Other` boundary. This remains evidence of a stale deployed revision/configuration, not permission to mutate Production.
+- Required Owner action: deploy the corrected Water and Air Apps Script source, then rerun the same aggregate read-only smoke command and require zero failures across all scopes. Do not treat the local fixture PASS as live deployment proof.
 
 ## Files Changed
 
 - Product/runtime: `START-ANF3.bat`, `apps/web/src/`, `js/`, `server/pdf_server.py`, `server/tests/`.
+- Apps Script source: `google/app-scripts/RPP2-water-record.gs`, `google/app-scripts/RPP2-air-record.gs`.
 - Automated validation: `validation/run_local_validation.mjs`, `validation/test_legacy_document_mapping.mjs`, `validation/fixtures/deployment-smoke.json`, `validation/test_deployment_smoke.mjs`, `validation/validate_browser_smoke.mjs`, `validation/validate_deployment_smoke.mjs`, `validation/validate_document_artifacts.py`, `validation/validate_launchers.mjs`.
 - Release/docs: `VERSION.txt`, `RELEASE.txt`, `.gitignore`, `docs/OUTPUT.md`, and this report.
 - Coordination files were updated separately and are not part of the product release snapshot.
 
 ## Residual Risks
 
-- Live Water building isolation remains a blocking acceptance risk until the deployed revision is corrected and read-only smoke passes.
+- Live Water/Air `Other` building isolation remains a blocking acceptance risk until the corrected deployed revision is active and read-only smoke passes.
 - The package metadata remains `7.1.0` while the application release stamp is `7.1aa`; this is not used as the user-facing release identity and should be kept intentional or reconciled in a separate release decision.
 - Target-machine behavior, controlled owner templates, and visual sign-off remain outside the local automated proof.
 
@@ -118,4 +122,4 @@ The browser gate covered all seven print routes plus Fill-in-before-Generate, no
 
 ## Recommendation
 
-`NOT_READY_FOR_ACCEPTANCE`: the detailed local automatic gate is green and replaces Owner execution for the repository-testable behaviors, but the observed live Water `Other` isolation mismatch is a blocking external deployment defect. Keep the branch available for Owner investigation and do not claim final release acceptance until the read-only live smoke passes.
+`NOT_READY_FOR_ACCEPTANCE`: the detailed local automatic gate and source fix are green, but the live Water/Air `Other` isolation mismatch remains a blocking external deployment defect. Keep the branch available for Owner deployment and do not claim final release acceptance until the aggregate read-only live smoke passes.

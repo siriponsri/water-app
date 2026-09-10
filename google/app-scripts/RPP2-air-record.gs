@@ -734,7 +734,7 @@ function airFilterValues_(value) {
 }
 
 function airToken_(value) {
-  return String(value || '').trim().toLowerCase().replace(/[\\s_.-]+/g, '');
+  return String(value || '').trim().toLowerCase().replace(/[\s_.-]+/g, '');
 }
 
 function airSampleMatchesAny_(samples, field, requested) {

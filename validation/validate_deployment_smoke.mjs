@@ -89,52 +89,66 @@ async function fetchWithTimeout(url, context) {
   }
 }
 
-export async function runDeploymentSmoke({ urls = {}, fixture = null, log = console.log } = {}) {
+export async function runDeploymentSmoke({ urls = {}, fixture = null, log = console.log, continueOnError = false } = {}) {
   const results = [];
+  const failures = [];
   for (const [domain, workflow, buildings] of cases) {
     const endpoint = urls[domain];
     if (!fixture && !endpoint) throw new Error(`${domain} smoke URL is not configured`);
     if (!fixture) assertAppsScriptExecUrl(endpoint, `${domain} smoke URL`);
     for (const building of buildings) {
-      const seen = new Set();
-      let cursor = '';
-      let pages = 0;
-      do {
-        let payload;
-        if (fixture) {
-          const pageSet = fixturePages(fixture, domain, workflow, building);
-          payload = pageSet[pages];
-          if (!payload) throw new Error(`${workflow} ${building}: fixture cursor did not terminate safely`);
-        } else {
-          const request = new URL(endpoint);
-          request.searchParams.set('action', 'search');
-          request.searchParams.set('workflow', workflow);
-          request.searchParams.set('building', building);
-          request.searchParams.set('limit', '100');
-          if (cursor) request.searchParams.set('cursor', cursor);
-          const context = `${domain}/${workflow} ${building} page ${pages + 1}${cursor ? ` cursor ${cursor}` : ' initial'}`;
-          payload = await fetchWithTimeout(request, context);
-          assertLivePayload(payload, domain, workflow, context);
-        }
-        const data = payload?.data;
-        if (!data || !Array.isArray(data.items)) throw new Error(`${workflow} ${building}: response items is not an array`);
-        for (const item of data.items) {
-          if (segment(item?.building) !== segment(building)) {
-            throw new Error(`${workflow} ${building}: received mixed building ${item?.building || '(blank)'}`);
+      try {
+        const seen = new Set();
+        let cursor = '';
+        let pages = 0;
+        do {
+          let payload;
+          if (fixture) {
+            const pageSet = fixturePages(fixture, domain, workflow, building);
+            payload = pageSet[pages];
+            if (!payload) throw new Error(`${workflow} ${building}: fixture cursor did not terminate safely`);
+          } else {
+            const request = new URL(endpoint);
+            request.searchParams.set('action', 'search');
+            request.searchParams.set('workflow', workflow);
+            request.searchParams.set('building', building);
+            request.searchParams.set('limit', '100');
+            if (cursor) request.searchParams.set('cursor', cursor);
+            const context = `${domain}/${workflow} ${building} page ${pages + 1}${cursor ? ` cursor ${cursor}` : ' initial'}`;
+            payload = await fetchWithTimeout(request, context);
+            assertLivePayload(payload, domain, workflow, context);
           }
-        }
-        const next = data.nextCursor == null ? '' : String(data.nextCursor);
-        pages += 1;
-        if (next && (seen.has(next) || pages > 100)) {
-          throw new Error(`${workflow} ${building}: cursor did not terminate safely`);
-        }
-        if (next) seen.add(next);
-        cursor = next;
-      } while (cursor);
-      const result = { domain, workflow, building, pages };
-      results.push(result);
-      log(`PASS ${workflow} ${building}: ${pages} page(s), logical building scope preserved`);
+          const data = payload?.data;
+          if (!data || !Array.isArray(data.items)) throw new Error(`${workflow} ${building}: response items is not an array`);
+          for (const item of data.items) {
+            if (segment(item?.building) !== segment(building)) {
+              throw new Error(`${workflow} ${building}: received mixed building ${item?.building || '(blank)'}`);
+            }
+          }
+          const next = data.nextCursor == null ? '' : String(data.nextCursor);
+          pages += 1;
+          if (next && (seen.has(next) || pages > 100)) {
+            throw new Error(`${workflow} ${building}: cursor did not terminate safely`);
+          }
+          if (next) seen.add(next);
+          cursor = next;
+        } while (cursor);
+        const result = { domain, workflow, building, pages };
+        results.push(result);
+        log(`PASS ${workflow} ${building}: ${pages} page(s), logical building scope preserved`);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        failures.push({ domain, workflow, building, error: message });
+        log(`FAIL ${workflow} ${building}: ${message}`);
+        if (!continueOnError) throw error;
+      }
     }
+  }
+  if (failures.length) {
+    const detail = failures.map(({ workflow, building, error }) => `${workflow} ${building}: ${error}`).join('; ');
+    const aggregate = new Error(`Deployment smoke failed for ${failures.length} scope(s): ${detail}`);
+    aggregate.failures = failures;
+    throw aggregate;
   }
   return results;
 }
@@ -151,7 +165,7 @@ async function main() {
     process.exitCode = 2;
     return;
   }
-  await runDeploymentSmoke({ urls: {
+  await runDeploymentSmoke({ continueOnError: true, urls: {
     water: assertAppsScriptExecUrl(waterUrl, 'ANF3_WATER_SMOKE_URL'),
     air: assertAppsScriptExecUrl(airUrl, 'ANF3_AIR_SMOKE_URL'),
     cv: assertAppsScriptExecUrl(cvUrl, 'ANF3_CV_SMOKE_URL')

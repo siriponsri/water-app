@@ -814,7 +814,7 @@ function waterFilterValues_(value) {
 }
 
 function waterToken_(value) {
-  return String(value || '').trim().toLowerCase().replace(/[\\s_.-]+/g, '');
+  return String(value || '').trim().toLowerCase().replace(/[\s_.-]+/g, '');
 }
 
 function waterSampleMatchesAny_(samples, field, requested) {
