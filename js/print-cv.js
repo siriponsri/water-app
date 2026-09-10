@@ -161,6 +161,9 @@ function updateCvPrintRoute() {
 }
 
 function cvPointLabel(sample) {
+  if (sample && (sample.equipment || sample.location)) {
+    return [sample.equipment, sample.location].filter(Boolean).join(' - ');
+  }
   return [sample.room, sample.item, sample.equipment, sample.location].filter(Boolean).join(' / ');
 }
 
@@ -168,6 +171,7 @@ function cvSampleResult(sample) {
   if (sample.excluded) return 'Excluded';
   if (sample.resultDisplay !== undefined && sample.resultDisplay !== '') return sample.resultDisplay;
   if (sample.resultValue !== undefined && sample.resultValue !== null && sample.resultValue !== '') return String(sample.resultValue);
+  if (sample.result !== undefined && sample.result !== null && sample.result !== '') return String(sample.result);
   return '';
 }
 
@@ -237,6 +241,8 @@ function cvCommonTags(record, worksheetNo) {
     docNo: record.docNo || worksheetNo,
     building: record.building || '',
     samplingDate: formatDateDMY(record.samplingDate) || '',
+    samplingTime: record.samplingTime || '',
+    'samplingTime ': record.samplingTime || '',
     performedDate: formatDateDMY(record.performedDate) || '',
     determinedDate: formatDateDMY(record.determinedDate) || '',
     approvedDate: formatDateDMY(record.approvedDate) || '',
@@ -254,7 +260,7 @@ function cvCommonTags(record, worksheetNo) {
     lotPCA: stripApostrophe(record.lotPCA || ''),
     lotPlate: stripApostrophe(record.lotPlate || ''),
     lotPipette: stripApostrophe(record.lotPipette || ''),
-    lotMembrane: stripApostrophe(record.lotMembrane || ''),
+    lotMembrane: stripApostrophe(record.lotPMembrane || record.lotMembrane || ''),
     lotForceps: stripApostrophe(record.lotForceps || ''),
     lotBuffer: stripApostrophe(record.lotBuffer || ''),
     comment: record.comment || ''
@@ -269,20 +275,19 @@ function mapCvTags(record, route, pageSamples, worksheetNo) {
     const point = sample ? cvPointLabel(sample) : '';
     const result = sample ? cvSampleResult(sample) : '';
     const sampleId = sample ? String(sample.sampleId || '') : '';
-    // Rinse templates use tagNo for the sampling point label. Keep the
-    // samplingPoint placeholders blank to match the authoritative DOCX.
+    const sourceTag = sample ? String(sample.tagNo ?? sample.samplingTag ?? '') : '';
     const isRinse = route !== CV_PRINT_ROUTES.CONTACT_PLATE;
     tags[`samplingPoint${suffix}`] = isRinse ? '' : point;
-    tags[`tagNo${suffix}`] = isRinse ? point : sampleId;
+    tags[`tagNo${suffix}`] = isRinse ? sourceTag : sampleId;
     if (route === CV_PRINT_ROUTES.CONTACT_PLATE) {
       tags[`Grade${suffix}`] = sample?.grade || '';
       tags[`result${suffix}`] = result;
     } else if (route === CV_PRINT_ROUTES.PW_PRW) {
       tags[`result1${suffix}`] = '';
       tags[`result2${suffix}`] = '';
-      tags[`resultAvg${suffix}`] = '';
+      tags[`resultAvg${suffix}`] = result;
     } else {
-      tags[`result${suffix}`] = '';
+      tags[`result${suffix}`] = result;
     }
   }
   return tags;

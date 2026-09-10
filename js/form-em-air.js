@@ -665,12 +665,12 @@ function collectFormData() {
         location: pointData?.location || pointData?.samplingPoint || '',
         floor: pointData?.floor || '',
         grade: pointData?.grade || '',
-        tempRoom: document.getElementById(`tempRoom-${rowId}`)?.value || 'N/A',
-        rhRoom: document.getElementById(`rhRoom-${rowId}`)?.value || 'N/A',
-        timeIn: document.getElementById(`timeIn-${rowId}`)?.value || 'N/A',
-        timeOut: document.getElementById(`timeOut-${rowId}`)?.value || 'N/A',
+        tempRoom: document.getElementById(`tempRoom-${rowId}`)?.value || '',
+        rhRoom: document.getElementById(`rhRoom-${rowId}`)?.value || '',
+        timeIn: document.getElementById(`timeIn-${rowId}`)?.value || '',
+        timeOut: document.getElementById(`timeOut-${rowId}`)?.value || '',
         occurResult: blankMode ? '' : (document.getElementById(`result-${rowId}`)?.value || ''),
-        remark: document.getElementById(`remark-${rowId}`)?.value || 'N/A'
+        remark: document.getElementById(`remark-${rowId}`)?.value || ''
       });
     }
   });

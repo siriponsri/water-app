@@ -104,6 +104,12 @@ function samplesOf(record: RecordData, samples: RecordData[]) {
   return samples.length ? samples : (Array.isArray(record.samples) ? record.samples as RecordData[] : []);
 }
 
+export function templateSampleCapacity(workflow: string) {
+  if (workflow === 'em-air') return 50;
+  if (workflow === 'compressed-air' || workflow === 'cleaning-validation-contact') return 10;
+  return 30;
+}
+
 function header(record: RecordData, worksheetNo: string) {
   return {
     docNo: text(record.docNo || record.worksheetNo || worksheetNo), building: text(record.building),
@@ -139,7 +145,7 @@ export function documentPayload(workflow: string, record: RecordData, samples: R
      same derivation as `js/print-em-air.js:363`. Unfilled until now, so the EM
      template printed the literal `<floor>` on every worksheet. */
   payload.floor = text(record.floor || rows[0]?.floor);
-  const limit = workflow === 'em-air' ? 50 : workflow === 'compressed-air' ? 10 : workflow === 'cleaning-validation-contact' ? 10 : 30;
+  const limit = templateSampleCapacity(workflow);
   if (workflow === 'compressed-air') payload.tempRoom01 = measure(record.temp);
 
   /* CV Rinse keeps the source contract intact. A sampling point is not a tag,
@@ -188,4 +194,27 @@ export function documentPayload(workflow: string, record: RecordData, samples: R
     }
   }
   return payload;
+}
+
+/**
+ * Build the self-contained page dictionaries required by the PDF server.
+ * Every page repeats the record/header fields and carries only its own sample
+ * window; the server intentionally does not inherit top-level data into pages.
+ */
+export function documentPages(
+  workflow: string,
+  record: RecordData,
+  samples: RecordData[],
+  worksheetNo: string,
+  method?: string
+) {
+  const rows = samplesOf(record, samples);
+  const capacity = templateSampleCapacity(workflow);
+  const pageCount = Math.max(1, Math.ceil(rows.length / capacity));
+  return Array.from({ length: pageCount }, (_, pageIndex) => {
+    const pageRows = rows.slice(pageIndex * capacity, (pageIndex + 1) * capacity);
+    const page = documentPayload(workflow, record, pageRows, worksheetNo, method);
+    page.sampleCount = String(rows.length);
+    return page;
+  });
 }

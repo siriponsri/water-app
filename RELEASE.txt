@@ -1,6 +1,6 @@
-Package: ANF3-Laboratory-Records-20260907
-Version: 7.1t
-Built: 2026-09-07 01:00:28 +0000
+Package: ANF3-Laboratory-Records-20260911
+Version: 7.1aa
+Built: 2026-09-11 02:37:13 +0700
 
 Run it:  double-click START-ANF3.bat
 Quality per PC: the "ตั้งค่าเครื่องนี้" tab in the app

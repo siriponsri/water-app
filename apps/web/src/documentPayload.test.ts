@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { documentPayload } from './documentPayload';
+import { documentPages, documentPayload, templateSampleCapacity } from './documentPayload';
 
 describe('documentPayload', () => {
   it('maps WFI result and legacy membrane aliases', () => {
@@ -131,5 +131,55 @@ describe('a zero count survives the alias chain', () => {
   it('still falls back to the aliases when the result is genuinely absent', () => {
     expect(documentPayload('cleaning-validation-contact', {}, [{ resultDisplay: 'TNTC' }], 'C').result01).toBe('TNTC');
     expect(documentPayload('cleaning-validation-contact', {}, [{}], 'C').result01).toBe('');
+  });
+});
+
+describe('documentPages', () => {
+  it('splits EM at 50 samples and repeats the header on page two', () => {
+    const rows = Array.from({ length: 51 }, (_, index) => ({
+      samplingPoint: `Room ${index + 1}`,
+      tempRoom: index + 1,
+      rhRoom: 50 + index
+    }));
+    const pages = documentPages('em-air', { building: 'Building 10' }, rows, 'AT-26-B10-0001');
+
+    expect(templateSampleCapacity('em-air')).toBe(50);
+    expect(pages).toHaveLength(2);
+    expect(pages[0].building).toBe('Building 10');
+    expect(pages[1].building).toBe('Building 10');
+    expect(pages[0].sampleCount).toBe('51');
+    expect(pages[1].sampleCount).toBe('51');
+    expect(pages[0].roomNo01).toBe('Room 1');
+    expect(pages[1].roomNo01).toBe('Room 51');
+    expect(pages[1].roomNo50).toBe('');
+  });
+
+  it('splits compressed-air at 10 samples without inventing record temperature', () => {
+    const rows = Array.from({ length: 11 }, (_, index) => ({
+      samplingPoint: `Point ${index + 1}`,
+      temp: '',
+      rh: ''
+    }));
+    const pages = documentPages('compressed-air', { temp: '' }, rows, 'AC-26-B10-0001');
+
+    expect(pages).toHaveLength(2);
+    expect(pages[1].building).toBe('');
+    expect(pages[1].roomNo01).toBe('Point 11');
+    expect(pages[1].tempRoom01).toBe('');
+    expect(pages[1].temp01).toBe('');
+    expect(pages[1].rh01).toBe('');
+  });
+
+  it('splits CV rinse at 30 samples and retains page-local results', () => {
+    const rows = Array.from({ length: 31 }, (_, index) => ({
+      samplingPoint: `Point ${index + 1}`,
+      resultAvg: String(index + 1)
+    }));
+    const pages = documentPages('cleaning-validation-rinse-pour', { sampleMatrix: 'Rinse' }, rows, 'CVR-26-B16-0001');
+
+    expect(pages).toHaveLength(2);
+    expect(pages[1].samplingPoint01).toBe('');
+    expect(pages[1].resultAvg01).toBe('31');
+    expect(pages[1].resultAvg30).toBe('');
   });
 });

@@ -10,7 +10,7 @@ import {
 import printJS from 'print-js';
 import { endpointConfigured, getSystemRecord, searchAllSystem, searchSystem } from './api';
 import type { RecordFilters } from './api';
-import { activeBinders, binderById, binderForContext, binderInstances, buildingGroups, calendarId, domains, listRoute, shelfBinders, tools, workflowById, workflows } from './appData';
+import { activeBinders, binderById, binderForContext, binderInstances, buildingGroups, calendarId, domains, shelfBinders, tools, workflowById, workflows } from './appData';
 import type { BinderInstance, BuildingGroupId, Tool, Workflow } from './appData';
 import { getCachedRecord, getCachedSearch, putCachedRecord, putCachedSearch } from './storage';
 import type { CachedRecord, SearchItem } from './storage';
@@ -28,16 +28,17 @@ import type { BinderShapeId } from './binderShape';
 import { QUALITY_OPTIONS, onQualityChange, readQuality, setQuality, applyQuality, type QualityChoice } from './settings';
 import { clearOperator, logEvent, operatorLabel, operatorLooksValid, OPERATOR_EVENT, readLog, readOperator, setOperator, storageIsUnavailable, LOG_ACTION_LABELS } from './operator';
 import type { LogEntry, Operator } from './operator';
-import { mergeParts, renderBatch } from './batchPrint';
+import { BatchConflictError, mergeParts, renderBatch, replaceBatchConflict } from './batchPrint';
 import { renderPages, type RenderedPage } from './pdfPreview';
-import type { BatchItem, BatchPart, BatchRender } from './batchPrint';
+import type { BatchConflict, BatchItem, BatchPart, BatchRender } from './batchPrint';
 import { documentPayload } from './documentPayload';
 import { filterRecordScope } from './recordScope';
 import { buildingChoices, readBuilding, setBuilding } from './buildingContext';
 import { groupListItems } from './listGroups';
 import type { ListGroup } from './listGroups';
+import { listReturnRoute, normalizeListSearchParams } from './listState';
 import { queueReturnTo, readPrintQueue, writePrintQueue } from './printQueue';
-import { mergePrintFill, printableFields, readPrintFill, writePrintFill } from './printFill';
+import { mergePrintFill, printFieldLabel, printableFields, readPrintFill, writePrintFill } from './printFill';
 import { editableRecordFields, editableSampleFields, resultValueValid, visibleRecordFields, visibleSampleFields } from './presentation';
 
 const DeskScene = lazy(() => import('./DeskScene'));
@@ -73,6 +74,39 @@ function useMedia(query: string) {
     return () => list.removeEventListener('change', update);
   }, [query]);
   return matches;
+}
+
+function useDialogFocus(
+  open: boolean,
+  onClose: () => void,
+  dialog: React.RefObject<HTMLElement | null>,
+  initial?: React.RefObject<HTMLElement | null>
+) {
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+  useEffect(() => {
+    if (!open || !dialog.current) return;
+    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const controls = () => Array.from(dialog.current?.querySelectorAll<HTMLElement>(
+      'button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), textarea:not([disabled])'
+    ) || []);
+    (initial?.current || controls()[0])?.focus();
+    const key = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') { event.preventDefault(); onCloseRef.current(); return; }
+      if (event.key !== 'Tab') return;
+      const focusable = controls();
+      if (!focusable.length) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+      if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+    };
+    document.addEventListener('keydown', key);
+    return () => {
+      document.removeEventListener('keydown', key);
+      if (previous?.isConnected) previous.focus();
+    };
+  }, [open, dialog, initial]);
 }
 
 /* Which binder the current route is inside, if any. Read once at the shell so
@@ -449,7 +483,7 @@ function OperatorGate({ current }: { current: Operator }) {
         <input
           value={name}
           onChange={(event) => setName(event.target.value)}
-          placeholder="เช่น สมชาย ใจดี"
+          placeholder="[ชื่อ หรือ ชื่อเล่น]"
           autoFocus={!current.code}
           maxLength={60}
         />
@@ -460,7 +494,7 @@ function OperatorGate({ current }: { current: Operator }) {
           className="data"
           value={code}
           onChange={(event) => setCode(event.target.value)}
-          placeholder="เช่น 4417"
+          placeholder="[รหัสพนักงาน]"
           autoFocus={Boolean(current.code) && !current.name ? false : undefined}
           maxLength={40}
         />
@@ -518,6 +552,9 @@ function BatchPreview({ workflow, items, drafts, presetMethod, onClose }: {
   const [dropped, setDropped] = useState<Set<string>>(new Set());
   const [failed, setFailed] = useState('');
   const [busy, setBusy] = useState('');
+  const [conflictDialog, setConflictDialog] = useState<BatchConflict | null>(null);
+  const [conflictBusy, setConflictBusy] = useState('');
+  const [conflictError, setConflictError] = useState('');
   const stop = useRef<AbortController | null>(null);
 
   /* The batch is whatever was ticked when the preview opened, captured once.
@@ -563,11 +600,42 @@ function BatchPreview({ workflow, items, drafts, presetMethod, onClose }: {
   }, [onClose]);
 
   const parts = render?.parts ?? [];
+  const conflicts = render?.conflicts ?? [];
   const keep = parts.filter((part) => !dropped.has(part.recordKey));
   const pages = keep.reduce((sum, part) => sum + part.pageCount, 0);
   const running = !render && !failed;
   const percent = progress.total ? Math.round((progress.done / progress.total) * 100) : 0;
   const stamp = new Date().toISOString().slice(0, 10);
+
+  const reviewReplacement = async (conflict: BatchConflict) => {
+    const item = batchItems.find((candidate) => candidate.recordKey === conflict.recordKey);
+    if (!item) return;
+    setConflictBusy(conflict.recordKey);
+    setConflictError('');
+    try {
+      const part = await replaceBatchConflict(workflow, item, presetMethod, drafts[item.recordKey] || {}, conflict);
+      const order = new Map(batchItems.map((candidate, index) => [candidate.recordKey, index]));
+      setRender((current) => current && {
+        ...current,
+        parts: [...current.parts, part].sort((left, right) => (order.get(left.recordKey) || 0) - (order.get(right.recordKey) || 0)),
+        conflicts: current.conflicts.filter((candidate) => candidate.recordKey !== conflict.recordKey)
+      });
+      setConflictDialog(null);
+    } catch (reason) {
+      if (reason instanceof BatchConflictError) {
+        setRender((current) => current && {
+          ...current,
+          conflicts: current.conflicts.map((candidate) => candidate.recordKey === conflict.recordKey ? reason.conflict : candidate)
+        });
+        setConflictDialog(reason.conflict);
+        setConflictError('The worksheet changed while it was awaiting confirmation. Review the new changes.');
+      } else {
+        setConflictError(reason instanceof Error ? reason.message : 'Document replacement failed');
+      }
+    } finally {
+      setConflictBusy('');
+    }
+  };
 
   const toggle = (recordKey: string) => setDropped((value) => {
     const next = new Set(value);
@@ -622,7 +690,7 @@ function BatchPreview({ workflow, items, drafts, presetMethod, onClose }: {
         {!running && !failed && <p>{keep.length} ใบ · <span className="data">{pages}</span> หน้า{dropped.size ? ` · ตัดออก ${dropped.size} ใบ` : ''}</p>}
       </div>
       <div className="preview-actions">
-        {!running && keep.length > 0 && <>
+        {!running && keep.length > 0 && conflicts.length === 0 && <>
           <button type="button" onClick={() => void withMerged('download')} disabled={Boolean(busy)}>
             <Download size={15} />ดาวน์โหลด
           </button>
@@ -649,6 +717,15 @@ function BatchPreview({ workflow, items, drafts, presetMethod, onClose }: {
     </div>}
 
     {render && <div className="preview-body">
+      {conflicts.length > 0 && <>
+        <ul className="batch-conflicts" aria-label="Worksheets requiring replacement review">
+          {conflicts.map((conflict) => <li key={conflict.recordKey}>
+            <div><strong className="data">{conflict.worksheetNo}</strong><span>Existing generated document differs in: {conflict.changedFields.length ? conflict.changedFields.join(', ') : 'other reviewed values'}.</span></div>
+            <button type="button" onClick={() => { setConflictError(''); setConflictDialog(conflict); }} disabled={Boolean(conflictBusy)}>Review replacement</button>
+          </li>)}
+        </ul>
+        {conflictError && <p className="note" role="alert">{conflictError}</p>}
+      </>}
       {render.skipped.length > 0 && <ul className="batch-skipped">
         {render.skipped.map((row) => <li key={row.worksheetNo}>
           <Info size={14} aria-hidden="true" />
@@ -666,6 +743,38 @@ function BatchPreview({ workflow, items, drafts, presetMethod, onClose }: {
         onToggle={() => toggle(part.recordKey)}
       />)}
     </div>}
+    {conflictDialog && <BatchConflictDialog
+      conflict={conflictDialog}
+      busy={conflictBusy === conflictDialog.recordKey}
+      onCancel={() => setConflictDialog(null)}
+      onConfirm={() => void reviewReplacement(conflictDialog)}
+    />}
+  </div>;
+}
+
+function BatchConflictDialog({ conflict, busy, onCancel, onConfirm }: {
+  conflict: BatchConflict;
+  busy: boolean;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  const dialog = useRef<HTMLElement | null>(null);
+  const close = useRef<HTMLButtonElement | null>(null);
+  useDialogFocus(true, onCancel, dialog, close);
+  return <div className="scrim" role="presentation">
+    <section ref={dialog} className="dialog" role="dialog" aria-modal="true" aria-labelledby="batch-conflict-title">
+      <Info size={22} aria-hidden="true" />
+      <div>
+        <h2 id="batch-conflict-title">Review document replacement</h2>
+        <p>Worksheet <span className="data">{conflict.worksheetNo}</span> already has a generated document. The reviewed values differ in:</p>
+        <ul>{(conflict.changedFields.length ? conflict.changedFields : ['Other reviewed values']).map((label) => <li key={label}>{label}</li>)}</ul>
+        <p>{conflict.existingPdfIds.length} existing generated version{conflict.existingPdfIds.length === 1 ? '' : 's'} will be superseded only after the new document is complete.</p>
+      </div>
+      <div className="row">
+        <button ref={close} type="button" className="quiet" onClick={onCancel}>Cancel</button>
+        <button type="button" className="primary" disabled={busy} onClick={onConfirm}>{busy ? 'Replacing...' : 'Replace reviewed document'}</button>
+      </div>
+    </section>
   </div>;
 }
 
@@ -1386,7 +1495,7 @@ function RecordsPage() {
   }
 
   const filters: RecordFilters = {
-    building,
+    building, q: searchParams.get('q') || undefined, from: searchParams.get('from') || undefined, to: searchParams.get('to') || undefined,
     gasType: searchParams.get('gasType') || undefined,
     waterType: searchParams.get('waterType') || undefined,
     samplingFamily,
@@ -1400,30 +1509,43 @@ function ListPage() {
   const online = useOnline();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
+  const rawListQuery = searchParams.toString();
+  const normalizedSearchParams = useMemo(() => normalizeListSearchParams(searchParams), [rawListQuery]);
+  const normalizedListQuery = normalizedSearchParams.toString();
   const [groups, setGroups] = useState<ListGroup[]>([]);
   const [loading, setLoading] = useState(true);
   const [errors, setErrors] = useState<Record<string, string>>({});
-  const [building, setBuildingFilter] = useState(() => searchParams.get('building') || readBuilding('water'));
-  const [query, setQuery] = useState(() => searchParams.get('q') || '');
-  const [from, setFrom] = useState(() => searchParams.get('from') || '');
-  const [to, setTo] = useState(() => searchParams.get('to') || '');
-  const groupBy = searchParams.get('groupBy') === 'work' ? 'work' : 'building';
+  const [building, setBuildingFilter] = useState(() => normalizedSearchParams.get('building') || readBuilding('water'));
+  const [query, setQuery] = useState(() => normalizedSearchParams.get('q') || '');
+  const [from, setFrom] = useState(() => normalizedSearchParams.get('from') || '');
+  const [to, setTo] = useState(() => normalizedSearchParams.get('to') || '');
+  const groupBy = normalizedSearchParams.get('groupBy') === 'work' ? 'work' : 'building';
   const [detail, setDetail] = useState<{ group: ListGroup; item: SearchItem; record: CachedRecord | null; loading: boolean; error: string } | null>(null);
-  const workflowId = searchParams.get('workflow') || '';
-  const domainId = searchParams.get('domain') || '';
+  const detailDialog = useRef<HTMLElement | null>(null);
+  const detailClose = useRef<HTMLButtonElement | null>(null);
+  const closeDetails = useCallback(() => setDetail(null), []);
+  const workflowId = normalizedSearchParams.get('workflow') || '';
+  const domainId = normalizedSearchParams.get('domain') || '';
   const selectedWorkflow = workflowId ? workflowById(workflowId) : undefined;
   const scopeFilters: RecordFilters = {
-    building: building || undefined, q: query || undefined, from: from || undefined, to: to || undefined, gasType: searchParams.get('gasType') || undefined,
-    waterType: searchParams.get('waterType') || undefined, samplingFamily: searchParams.get('samplingFamily') || undefined,
-    testMethod: searchParams.get('testMethod') || undefined, samplingMode: searchParams.get('samplingMode') || undefined, limit: 100
+    building: building || undefined, q: query || undefined, from: from || undefined, to: to || undefined, gasType: normalizedSearchParams.get('gasType') || undefined,
+    waterType: normalizedSearchParams.get('waterType') || undefined, samplingFamily: normalizedSearchParams.get('samplingFamily') || undefined,
+    testMethod: normalizedSearchParams.get('testMethod') || undefined, samplingMode: normalizedSearchParams.get('samplingMode') || undefined, limit: 100
   };
 
   useEffect(() => {
-    const requested = searchParams.get('building');
-    if (!requested) return;
-    (['water', 'air', 'cv'] as const).forEach((domain) => setBuilding(domain, requested));
-    setBuildingFilter(requested);
-  }, [searchParams]);
+    if (normalizedListQuery !== rawListQuery) setSearchParams(normalizedSearchParams, { replace: true });
+  }, [normalizedListQuery, normalizedSearchParams, rawListQuery, setSearchParams]);
+
+  useEffect(() => {
+    const requested = normalizedSearchParams.get('building');
+    const nextBuilding = requested || readBuilding('water');
+    if (requested) (['water', 'air', 'cv'] as const).forEach((domain) => setBuilding(domain, requested));
+    setBuildingFilter(nextBuilding);
+    setQuery(normalizedSearchParams.get('q') || '');
+    setFrom(normalizedSearchParams.get('from') || '');
+    setTo(normalizedSearchParams.get('to') || '');
+  }, [normalizedListQuery, normalizedSearchParams]);
 
   useEffect(() => {
     const sync = () => setBuildingFilter(readBuilding('water'));
@@ -1433,7 +1555,7 @@ function ListPage() {
 
   useEffect(() => {
     const controller = new AbortController();
-    setLoading(true); setErrors({});
+    setLoading(true); setErrors({}); setGroups([]);
     if (!online) {
       setGroups([]); setErrors({ system: 'Connect to the System DB to load the complete record list.' }); setLoading(false);
       return () => controller.abort();
@@ -1442,17 +1564,21 @@ function ListPage() {
     Promise.all(visibleWorkflows.map(async (workflow) => {
       try {
         const result = await searchAllSystem(workflow, scopeFilters, controller.signal);
-        return groupListItems(workflow, filterRecordScope(result.items, scopeFilters), building ? 'work' : groupBy);
+        const nextGroups = groupListItems(workflow, filterRecordScope(result.items, scopeFilters), building ? 'work' : groupBy, building || undefined);
+        if (!controller.signal.aborted) {
+          setGroups((current) => [...current.filter((group) => group.workflowId !== workflow.id), ...nextGroups]);
+        }
+        return nextGroups;
       } catch (reason) {
         if (!controller.signal.aborted) setErrors((current) => ({ ...current, [workflow.id]: reason instanceof Error ? reason.message : 'System DB unavailable' }));
         return [];
       }
-    })).then((result) => { if (!controller.signal.aborted) setGroups(result.flat()); })
+    })).then(() => undefined)
       .finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
-  }, [online, building, workflowId, domainId, searchParams, query, from, to, groupBy]);
+  }, [online, building, workflowId, domainId, normalizedListQuery, query, from, to, groupBy]);
   const updateUrl = (updates: Record<string, string>) => {
-    const next = new URLSearchParams(searchParams);
+    const next = new URLSearchParams(normalizedSearchParams);
     Object.entries(updates).forEach(([key, value]) => { if (value) next.set(key, value); else next.delete(key); });
     setSearchParams(next, { replace: true });
   };
@@ -1464,22 +1590,9 @@ function ListPage() {
     }).catch((reason) => setDetail((current) => current?.item.recordKey === item.recordKey ? { ...current, loading: false, error: reason instanceof Error ? reason.message : 'Record unavailable' } : current));
   };
 
-  const open = (group: ListGroup, item: SearchItem) => {
-    const params = new URLSearchParams();
-    if (building) params.set('building', building);
-    ['gasType', 'waterType', 'samplingFamily', 'testMethod', 'samplingMode'].forEach((key) => {
-      const value = searchParams.get(key);
-      if (value) params.set(key, value);
-    });
-    if (group.workflowId === 'cv') {
-      params.set('samplingFamily', group.cvMethod === 'contact-plate' ? 'contact-plate' : 'rinse');
-      if (group.cvMethod && group.cvMethod !== 'contact-plate') params.set('testMethod', group.cvMethod);
-    }
-    navigate(`/records/${workflows.find((entry) => entry.id === group.workflowId)?.domain || 'water'}/${group.workflowId}/${encodeURIComponent(item.recordKey)}?${params}`);
-  };
   const [picked, setPicked] = useState<Map<string, { group: ListGroup; item: SearchItem }>>(new Map());
   const allRows = groups.flatMap((group) => group.items.map((item) => ({ group, item })));
-  useEffect(() => { setPicked(new Map()); }, [building, workflowId, domainId, query, from, to]);
+  useEffect(() => { setPicked(new Map()); }, [building, workflowId, domainId, query, from, to, groupBy, normalizedListQuery]);
   const compatibleWithSelection = (group: ListGroup) => !picked.size || [...picked.values()].every((pickedItem) => pickedItem.group.workflowId === group.workflowId && pickedItem.group.cvMethod === group.cvMethod);
   const toggle = (group: ListGroup, item: SearchItem) => setPicked((current) => { const next = new Map(current); const key = `${group.workflowId}:${item.recordKey}`; if (next.has(key)) next.delete(key); else if (compatibleWithSelection(group)) next.set(key, { group, item }); return next; });
   const clear = () => setPicked(new Map());
@@ -1491,24 +1604,26 @@ function ListPage() {
     const chosen = [...picked.values()]; const ids = new Set(chosen.map(({ group }) => group.workflowId));
     if (ids.size !== 1) return;
     const workflow = workflowById(chosen[0].group.workflowId)!;
-    writePrintQueue(chosen.map(({ group, item }) => ({ domain: workflow.domain, workflow: group.workflowId, recordKey: item.recordKey, worksheetNo: item.worksheetNo || item.recordId || item.recordKey, scope: building || 'all', returnTo: `/list?${searchParams.toString()}`, cvMethod: group.cvMethod })));
+    writePrintQueue(chosen.map(({ group, item }) => ({ domain: workflow.domain, workflow: group.workflowId, recordKey: item.recordKey, worksheetNo: item.worksheetNo || item.recordId || item.recordKey, scope: building || 'all', returnTo: listReturnRoute(normalizedSearchParams), cvMethod: group.cvMethod })));
     navigate(`/print/${workflow.domain}/${workflow.id}`);
   };
+  useDialogFocus(Boolean(detail), closeDetails, detailDialog, detailClose);
 
   return <div className="page wide">
     <header className="masthead"><h1>{domainId ? `${domainId === 'cv' ? 'Cleaning Validation' : domainId[0].toUpperCase() + domainId.slice(1)} records` : 'All records'}</h1><p>{building ? `${building} · ` : ''}Every worksheet grouped by building and work. Open a row or select worksheets to print.</p></header>
-    <div className="list-filters"><label><Search size={15} /><input value={query} onChange={(event) => { setQuery(event.target.value); updateUrl({ q: event.target.value }); }} placeholder="Search worksheet, product or sampling point" aria-label="Search records" /></label><label>From<input type="date" value={from} onChange={(event) => { setFrom(event.target.value); updateUrl({ from: event.target.value }); }} /></label><label>To<input type="date" value={to} onChange={(event) => { setTo(event.target.value); updateUrl({ to: event.target.value }); }} /></label><label>Group by<select value={groupBy} disabled={Boolean(building)} onChange={(event) => updateUrl({ groupBy: event.target.value === 'work' ? 'work' : '' })}><option value="building">Building, then work</option><option value="work">Work</option></select></label></div>
+    <div className="list-filters"><label><Search size={15} /><input value={query} onChange={(event) => { setQuery(event.target.value); updateUrl({ q: event.target.value }); }} placeholder="Search worksheet, product or sampling point" aria-label="Search records" /></label><label>From<input type="date" value={from} onChange={(event) => { setFrom(event.target.value); updateUrl({ from: event.target.value }); }} /></label><label>To<input type="date" value={to} onChange={(event) => { setTo(event.target.value); updateUrl({ to: event.target.value }); }} /></label><label>Group by<select value={groupBy} onChange={(event) => updateUrl({ groupBy: event.target.value === 'work' ? 'work' : '' })}><option value="building">Building, then work</option><option value="work">Work</option></select></label></div>
     {Object.entries(errors).map(([key, message]) => <p className="note" key={key}><Info size={14} />{key === 'system' ? message : `${workflowById(key)?.shortName || key}: ${message}`}</p>)}
-    {loading ? <p className="state is-loading"><RefreshCw size={18} />Loading records...</p> : groups.length === 0 ? <div className="state"><Search size={20} /><h2>No records</h2><p>There are no records for the selected building.</p></div> : <div className="list-groups">
+    {loading && <p className="state is-loading"><RefreshCw size={18} />Loading records...</p>}
+    {!loading && groups.length === 0 ? <div className="state"><Search size={20} /><h2>No records</h2><p>There are no records for the selected building.</p></div> : groups.length > 0 && <div className="list-groups">
       <div className="list-toolbar"><label><input type="checkbox" checked={allRows.length > 0 && picked.size === allRows.length} onChange={() => picked.size === allRows.length ? clear() : selectAll()} /> Select compatible</label><span>{picked.size} selected</span>{picked.size > 0 && <><button type="button" onClick={clear}>Clear</button><button type="button" className="primary" onClick={printSelected}><Printer size={14} />Print selected</button></>}</div>
       {groups.map((group) => <section className="list-group" key={group.key}>
-        <header><h2>{group.building}</h2><span>{group.label} · {group.items.length}</span></header>
+        <header><h2>{group.building}</h2><span>{group.domain === 'cv' ? 'Cleaning validation' : group.domain[0].toUpperCase() + group.domain.slice(1)} · {group.label} · {group.items.length}</span></header>
         <div className="run">{group.items.map((item) => <div className="list-row" key={item.recordKey}><input type="checkbox" disabled={!compatibleWithSelection(group)} checked={picked.has(`${group.workflowId}:${item.recordKey}`)} onChange={() => toggle(group, item)} aria-label={`Select ${item.worksheetNo || item.recordKey}`} title={!compatibleWithSelection(group) ? 'Select worksheets from one compatible work at a time' : undefined} /><button type="button" onClick={() => openDetails(group, item)}>
           <span><strong>{item.worksheetNo || item.recordId || item.recordKey}</strong><small>{item.building || group.building} · {item.samplingDate || 'No sampling date'}{item.performedDate ? ` · performed ${item.performedDate}` : ''}{item.samplingPoints ? ` · ${item.samplingPoints}` : ''}{item.sampleCount ? ` · ${item.sampleCount} samples` : ''}{group.cvMethod ? ` · ${group.label}` : ''}</small></span><ChevronRight size={14} />
         </button></div>)}</div>
       </section>)}
     </div>}
-    {detail && <section className="print-fill-drawer" role="dialog" aria-modal="true" aria-label="Record details"><header><h2>{detail.item.worksheetNo || detail.item.recordKey}</h2><button type="button" onClick={() => setDetail(null)}><X size={15} />Close</button></header>{detail.loading ? <p className="state is-loading"><RefreshCw size={16} />Loading details...</p> : detail.error ? <p className="note" role="alert"><Info size={14} />{detail.error}</p> : detail.record && <RecordSheet workflow={workflowById(detail.group.workflowId)!} value={detail.record} fresh={true} online={online} presetMethod={detail.group.cvMethod} />}</section>}
+    {detail && <section ref={detailDialog} className="print-fill-drawer" role="dialog" aria-modal="true" aria-label="Record details"><header><h2>{detail.item.worksheetNo || detail.item.recordKey}</h2><button ref={detailClose} type="button" onClick={closeDetails}><X size={15} />Close</button></header>{detail.loading ? <p className="state is-loading"><RefreshCw size={16} />Loading details...</p> : detail.error ? <p className="note" role="alert"><Info size={14} />{detail.error}</p> : detail.record && <RecordSheet workflow={workflowById(detail.group.workflowId)!} value={detail.record} fresh={true} online={online} presetMethod={detail.group.cvMethod} />}</section>}
   </div>;
 }
 
@@ -1525,12 +1640,13 @@ function PrintPage() {
   const [preflightError, setPreflightError] = useState('');
   const [preflightLoading, setPreflightLoading] = useState(false);
   const preflightTrigger = useRef<HTMLButtonElement | null>(null);
+  const preflightDialog = useRef<HTMLElement | null>(null);
+  const preflightClose = useRef<HTMLButtonElement | null>(null);
   useEffect(() => {
     const sync = () => setQueue(readPrintQueue());
     window.addEventListener('anf3:print-queue', sync);
     return () => window.removeEventListener('anf3:print-queue', sync);
   }, []);
-  if (!workflow || workflow.domain !== domain) return <Navigate to="/list" replace />;
   const items = queue.filter((item) => item.domain === domain && item.workflow === workflowId)
     .map((item) => ({ recordKey: item.recordKey, worksheetNo: item.worksheetNo }));
   const queued = queue.filter((item) => item.domain === domain && item.workflow === workflowId);
@@ -1546,7 +1662,7 @@ function PrintPage() {
       if (!route) throw new Error(`${item.worksheetNo}: no approved document route is available`);
       const payload = documentPayload(route, value.record, value.samples, item.worksheetNo, method);
       const saved = readPrintFill(workflow.domain, workflow.id, item.recordKey);
-      return [item.recordKey, { payload, fields: printableFields(payload), draft: mergePrintFill(payload, saved) }] as const;
+      return [item.recordKey, { payload, fields: printableFields(payload, route), draft: mergePrintFill(payload, saved, route) }] as const;
     })).then((loaded) => {
       if (controller.signal.aborted) return;
       setRecords(Object.fromEntries(loaded.map(([key, value]) => [key, { payload: value.payload, fields: value.fields }])));
@@ -1556,17 +1672,21 @@ function PrintPage() {
       .finally(() => { if (!controller.signal.aborted) setPreflightLoading(false); });
     return () => controller.abort();
   }, [preflight, workflow, domain, workflowId, queue]);
-  useEffect(() => {
-    if (!preflight) { preflightTrigger.current?.focus(); return; }
-    const close = (event: KeyboardEvent) => { if (event.key === 'Escape') setPreflight(false); };
-    window.addEventListener('keydown', close);
-    return () => window.removeEventListener('keydown', close);
-  }, [preflight]);
+  useDialogFocus(preflight, () => setPreflight(false), preflightDialog, preflightClose);
+  if (!workflow || workflow.domain !== domain) return <Navigate to="/list" replace />;
   if (!items.length) return <div className="page"><div className="state"><Printer size={20} /><h2>Print queue is empty</h2><Link className="text-link" to={returnTo}>Back to records</Link></div></div>;
   if (generate) return <BatchPreview workflow={workflow} items={items} drafts={drafts} presetMethod={queue.find((item) => item.domain === domain && item.workflow === workflowId)?.cvMethod} onClose={() => navigate(returnTo)} />;
   const active = records[activeRecordKey];
-  const invalid = active?.fields.some((field) => field.isResult && !resultValueValid(drafts[activeRecordKey]?.[field.key] || '')) || false;
+  const invalidRecords = queued.filter((item) => {
+    const entry = records[item.recordKey];
+    return !entry || entry.fields.some((field) => field.isResult && !resultValueValid(drafts[item.recordKey]?.[field.key] || ''));
+  });
+  const invalid = invalidRecords.length > 0;
+  const activeDraftDirty = Boolean(active && active.fields.some((field) =>
+    (drafts[activeRecordKey]?.[field.key] || '') !== (active.payload[field.key] || '')
+  ));
   const updateDraft = (key: string, value: string) => {
+    if (!active?.fields.some((field) => field.key === key && field.editable)) return;
     setDrafts((current) => {
       const next = { ...current, [activeRecordKey]: { ...current[activeRecordKey], [key]: value } };
       writePrintFill(workflow.domain, workflow.id, activeRecordKey, next[activeRecordKey]);
@@ -1583,15 +1703,16 @@ function PrintPage() {
     <header className="masthead"><h1>Print queue</h1><p>Review the queued worksheets before generating a preview.</p></header>
     <div className="run">{items.map((item) => <div className="list-row" key={item.recordKey}><span><strong>{item.worksheetNo}</strong><small>Queued worksheet</small></span></div>)}</div>
     <div className="actions"><button className="primary" type="button" ref={preflightTrigger} onClick={() => setPreflight(true)}><BookOpen size={15} />Fill in / Edit before print</button><Link className="text-link" to={returnTo}>Cancel</Link></div>
-    {preflight && <section className="print-fill-drawer" role="dialog" aria-modal="true" aria-label="Fill in or edit before print">
-      <header><h2>Fill in / Edit before print</h2><button type="button" onClick={() => setPreflight(false)}><X size={15} />Cancel</button></header>
+    {preflight && <section ref={preflightDialog} className="print-fill-drawer" role="dialog" aria-modal="true" aria-label="Fill in or edit before print">
+      <header><h2>Fill in / Edit before print</h2><button ref={preflightClose} type="button" onClick={() => setPreflight(false)}><X size={15} />Cancel</button></header>
       <p>Drafts stay on this computer. Worksheet identity, template route, sample count and row order are locked.</p>
       {preflightLoading ? <p className="state is-loading"><RefreshCw size={16} />Loading worksheets...</p> : preflightError ? <p className="note" role="alert"><Info size={14} />{preflightError}</p> : active && <>
-        <div className="run" aria-label="Queued worksheets">{queued.map((item) => <button type="button" key={item.recordKey} className={activeRecordKey === item.recordKey ? 'is-picked' : ''} onClick={() => setActiveRecordKey(item.recordKey)}><strong>{item.worksheetNo}</strong><small>{item.recordKey === activeRecordKey ? 'Editing draft' : 'Open draft'}</small></button>)}</div>
+        <div className="run" aria-label="Queued worksheets">{queued.map((item) => <button type="button" key={item.recordKey} className={activeRecordKey === item.recordKey ? 'is-picked' : ''} onClick={() => setActiveRecordKey(item.recordKey)}><strong>{item.worksheetNo}</strong><small>{item.recordKey === activeRecordKey ? 'Editing draft' : invalidRecords.some((entry) => entry.recordKey === item.recordKey) ? 'Needs review' : 'Reviewed'}</small></button>)}</div>
         <p className="note"><Lock size={14} />Editing printable values for {queued.find((item) => item.recordKey === activeRecordKey)?.worksheetNo}. Results may be blank, numbers, &lt;1, TNTC, or legacy text.</p>
-        <div className="print-fill-fields">{active.fields.map((field) => <label key={field.key}>{field.label}<input value={drafts[activeRecordKey]?.[field.key] || ''} aria-invalid={field.isResult && !resultValueValid(drafts[activeRecordKey]?.[field.key] || '')} onChange={(event) => updateDraft(field.key, event.target.value)} /></label>)}</div>
+        <p className="draft-state" role="status">{activeDraftDirty ? 'Draft differs from the System DB' : 'Using System DB values'}</p>
+        <div className="print-fill-fields">{active.fields.map((field) => <label key={field.key} className={field.editable ? undefined : 'is-locked'}><span>{field.label}{field.editable ? '' : ' (locked)'}</span><input disabled={!field.editable} value={drafts[activeRecordKey]?.[field.key] || ''} aria-readonly={!field.editable} aria-invalid={field.isResult && !resultValueValid(drafts[activeRecordKey]?.[field.key] || '')} onChange={(event) => updateDraft(field.key, event.target.value)} /></label>)}</div>
         {invalid && <p className="note" role="alert"><Info size={14} />A result value is too long or contains unsupported brackets.</p>}
-        <div className="actions"><button type="button" onClick={resetDraft}>Reset to System DB</button><button type="button" onClick={() => setPreflight(false)}>Cancel</button><button className="primary" type="button" disabled={invalid} onClick={() => { setPreflight(false); setGenerate(true); }}><BookOpen size={15} />Generate preview</button></div>
+        <div className="actions"><button type="button" onClick={resetDraft}>Reset to System DB</button><button type="button" onClick={() => setPreflight(false)}>Cancel</button><button className="primary" type="button" disabled={preflightLoading || invalid} onClick={() => { setPreflight(false); setGenerate(true); }}><BookOpen size={15} />Generate preview</button></div>
       </>}
     </section>}
   </div>;
@@ -1602,9 +1723,15 @@ function Workspace({ workflow, initialRecordKey, initialFilters = {}, presetMeth
   const location = useLocation();
   const online = useOnline();
   const [items, setItems] = useState<SearchItem[]>([]);
-  const [query, setQuery] = useState(''); const [from, setFrom] = useState(''); const [to, setTo] = useState('');
+  const [query, setQuery] = useState(initialFilters.q || ''); const [from, setFrom] = useState(initialFilters.from || ''); const [to, setTo] = useState(initialFilters.to || '');
   const [loading, setLoading] = useState(true); const [error, setError] = useState('');
   const [detail, setDetail] = useState<CachedRecord | null>(null); const [fresh, setFresh] = useState(false);
+
+  useEffect(() => {
+    setQuery(initialFilters.q || '');
+    setFrom(initialFilters.from || '');
+    setTo(initialFilters.to || '');
+  }, [initialFilters.q, initialFilters.from, initialFilters.to]);
 
   useEffect(() => {
     const controller = new AbortController(); setLoading(true); setError('');
@@ -1638,6 +1765,7 @@ function Workspace({ workflow, initialRecordKey, initialFilters = {}, presetMeth
   }, [workflow, initialRecordKey, online]);
 
   const select = (item: SearchItem) => navigate(`/records/${workflow.domain}/${workflow.id}/${encodeURIComponent(item.recordKey || item.recordId || item.worksheetNo || '')}${location.search}`);
+  const returnTo = listReturnRoute(new URLSearchParams(location.search), workflow.domain, workflow.id);
   /* The crumb already says which binder this is, so the lede only carries the
      part of the filter the crumb cannot: the sampling family and the method. */
   const SCOPE_WORDS: Record<string, string> = {
@@ -1708,18 +1836,13 @@ function Workspace({ workflow, initialRecordKey, initialFilters = {}, presetMeth
           </label>
           {picked.size > 0 && <>
             <button type="button" className="primary" onClick={() => {
-              const returnTo = listRoute(initialFilters.building, workflow.id, {
-                gasType: initialFilters.gasType || '', waterType: initialFilters.waterType || '',
-                samplingFamily: initialFilters.samplingFamily || '', testMethod: initialFilters.testMethod || '',
-                samplingMode: initialFilters.samplingMode || ''
-              });
-              writePrintQueue(scopedItems.filter((item) => picked.has(item.recordKey)).map((item) => ({
+               writePrintQueue(scopedItems.filter((item) => picked.has(item.recordKey)).map((item) => ({
                 domain: workflow.domain,
                 workflow: workflow.id,
                 recordKey: item.recordKey,
                 worksheetNo: item.worksheetNo || item.recordId || item.recordKey,
                 scope: initialFilters.building || 'all',
-                returnTo: returnTo,
+                 returnTo,
                 cvMethod: workflow.id === 'cv' ? normalizeCvTestMethod(item.testMethod || presetMethod) : undefined
               })));
               navigate(`/print/${workflow.domain}/${workflow.id}`);
@@ -1821,10 +1944,16 @@ function RecordSheet({ workflow, value, fresh, online, presetMethod }: { workflo
       </span>
     </div>
     <Actions workflow={workflow} value={value} availability={availability} presetMethod={presetMethod} />
-    <p className="legend">Record details</p>
-    <div className="fields">{fields.map((field) => <div key={field.key}>
-      <span className="key">{field.label}</span><span className="value">{display(value.record[field.key])}</span>
-    </div>)}</div>
+    {(['General', 'Sampling', 'Media', 'Results', 'Approval'] as const).map((section) => {
+      const sectionFields = fields.filter((field) => field.section === section);
+      if (!sectionFields.length) return null;
+      return <section className="detail-section" key={section}>
+        <h3 className="legend">{section}</h3>
+        <div className="fields">{sectionFields.map((field) => <div key={field.key}>
+          <span className="key">{field.label}</span><span className="value">{display(value.record[field.key])}</span>
+        </div>)}</div>
+      </section>;
+    })}
     <section className="samples">
       <h3 className="legend">Samples <span>{value.samples.length}</span></h3>
       {value.samples.slice(0, 100).map((sample, index) => <div className="sample" key={index}>
@@ -1840,6 +1969,9 @@ function Actions({ workflow, value, availability, presetMethod }: { workflow: Wo
   const [pdfId, setPdfId] = useState(''); const [busy, setBusy] = useState(false); const [message, setMessage] = useState('');
   const [viewer, setViewer] = useState(false);
   const [fillValues, setFillValues] = useState(() => readPrintFill(workflow.domain, workflow.id, value.recordKey));
+  const [conflict, setConflict] = useState<{ requestedPdfId: string; existingPdfIds: string[]; changedFields: string[] } | null>(null);
+  const editorDialog = useRef<HTMLElement | null>(null);
+  const editorClose = useRef<HTMLButtonElement | null>(null);
   const wide = useMedia('(min-width: 68rem)');
   /* The method chosen when the binder was opened wins; the record's own field
      is the fallback, and the radio group below can still override both. */
@@ -1867,8 +1999,11 @@ function Actions({ workflow, value, availability, presetMethod }: { workflow: Wo
     ? documentPayload(route, value.record, value.samples, String(value.record.worksheetNo || value.record.docNo || value.recordKey), method)
     : {};
   const [editorOpen, setEditorOpen] = useState(false);
-  const printable = printableFields(basePayload);
+  const printable = printableFields(basePayload, route || undefined);
+  const invalidFill = printable.some((field) => field.isResult && !resultValueValid(fillValues[field.key] ?? basePayload[field.key] ?? ''));
+  useDialogFocus(editorOpen, () => setEditorOpen(false), editorDialog, editorClose);
   const updateFill = (key: string, next: string) => {
+    if (!printable.some((field) => field.key === key && field.editable)) return;
     const values = { ...fillValues, [key]: next };
     setFillValues(values);
     writePrintFill(workflow.domain, workflow.id, value.recordKey, values);
@@ -1885,25 +2020,16 @@ function Actions({ workflow, value, availability, presetMethod }: { workflow: Wo
           workflow: route,
           worksheetNo: String(value.record.worksheetNo || value.record.docNo || value.recordKey),
           cvContext: workflow.id === 'cv' ? { samplingFamily: cvSamplingFamily(value.record), testMethod: method } : undefined,
-          data: mergePrintFill(basePayload, fillValues)
+          data: mergePrintFill(basePayload, fillValues, route || undefined)
         })
       });
       const result = await response.json();
       if (response.status === 409 && result.code === 'WORKSHEET_CONTENT_CONFLICT') {
-        const approved = window.confirm(`This worksheet has a different generated document. Replace it with this reviewed draft?`);
-        if (!approved) return;
-        const replacement = await fetch('/api/pdfs', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            workflow: route, worksheetNo: String(value.record.worksheetNo || value.record.docNo || value.recordKey),
-            cvContext: workflow.id === 'cv' ? { samplingFamily: cvSamplingFamily(value.record), testMethod: method } : undefined,
-            data: mergePrintFill(basePayload, fillValues),
-            regeneration: { mode: 'replace', requestedPdfId: result.requestedPdfId, existingPdfIds: result.existingPdfIds }
-          })
+        setConflict({
+          requestedPdfId: String(result.requestedPdfId || ''),
+          existingPdfIds: Array.isArray(result.existingPdfIds) ? result.existingPdfIds.map(String) : [],
+          changedFields: Array.isArray(result.changedFields) ? result.changedFields.map(String) : []
         });
-        const replacementResult = await replacement.json();
-        if (!replacement.ok) throw new Error(replacementResult.error || 'Document replacement failed');
-        setPdfId(replacementResult.pdfId);
         return;
       }
       if (!response.ok) throw new Error(result.error || 'PDF generation failed');
@@ -1919,6 +2045,38 @@ function Actions({ workflow, value, availability, presetMethod }: { workflow: Wo
         });
       }
     } catch (reason) { setMessage(reason instanceof Error ? reason.message : 'PDF generation failed'); } finally { setBusy(false); }
+  };
+
+  const confirmReplacement = async () => {
+    if (!conflict || !route) return;
+    setBusy(true); setMessage('');
+    try {
+      const response = await fetch('/api/pdfs', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          workflow: route, worksheetNo: String(value.record.worksheetNo || value.record.docNo || value.recordKey),
+          cvContext: workflow.id === 'cv' ? { samplingFamily: cvSamplingFamily(value.record), testMethod: method } : undefined,
+          data: mergePrintFill(basePayload, fillValues, route || undefined),
+          regeneration: { mode: 'replace', requestedPdfId: conflict.requestedPdfId, existingPdfIds: conflict.existingPdfIds }
+        })
+      });
+      const replacementResult = await response.json();
+      if (response.status === 409 && replacementResult.code === 'WORKSHEET_CONTENT_CONFLICT') {
+        setConflict({
+          requestedPdfId: String(replacementResult.requestedPdfId || ''),
+          existingPdfIds: Array.isArray(replacementResult.existingPdfIds) ? replacementResult.existingPdfIds.map(String) : [],
+          changedFields: Array.isArray(replacementResult.changedFields) ? replacementResult.changedFields.map(String) : []
+        });
+        setMessage('The record changed while it was awaiting confirmation. Review the new conflict details.');
+        return;
+      }
+      if (!response.ok) throw new Error(replacementResult.error || 'Document replacement failed');
+      setPdfId(replacementResult.pdfId);
+      setConflict(null);
+      logEvent('pdf_generated', { worksheetNo: worksheet, detail: route });
+    } catch (reason) {
+      setMessage(reason instanceof Error ? reason.message : 'Document replacement failed');
+    } finally { setBusy(false); }
   };
 
   /* Wrapped, unlike before: with the server stopped this rejected and the
@@ -1981,14 +2139,24 @@ function Actions({ workflow, value, availability, presetMethod }: { workflow: Wo
       </button>}
       {fileActions}
     </div>
-    {editorOpen && <section className="print-fill-drawer" role="dialog" aria-modal="true" aria-label="Fill in or edit before print">
-      <header><h3>Fill in / Edit before print</h3><button type="button" onClick={() => setEditorOpen(false)}><X size={15} />Close</button></header>
+    {editorOpen && <section ref={editorDialog} className="print-fill-drawer" role="dialog" aria-modal="true" aria-label="Fill in or edit before print">
+      <header><h3>Fill in / Edit before print</h3><button ref={editorClose} type="button" onClick={() => setEditorOpen(false)}><X size={15} />Cancel</button></header>
       <p>Draft changes are saved only on this computer. Worksheet identity, route and sample order stay locked.</p>
       <div className="print-fill-grid">
-        {printable.map((field) => <label key={field.key}><span>{field.label}</span><input value={fillValues[field.key] ?? basePayload[field.key] ?? ''} onChange={(event) => updateFill(field.key, event.target.value)} /></label>)}
+        {printable.map((field) => <label key={field.key} className={field.editable ? undefined : 'is-locked'}><span>{field.label}{field.editable ? '' : ' (locked)'}</span><input disabled={!field.editable} aria-readonly={!field.editable} value={fillValues[field.key] ?? basePayload[field.key] ?? ''} onChange={(event) => updateFill(field.key, event.target.value)} /></label>)}
       </div>
-      <div className="actions"><button type="button" onClick={() => { setFillValues({}); writePrintFill(workflow.domain, workflow.id, value.recordKey, {}); setPdfId(''); }}>Reset to System DB</button><button className="primary" type="button" disabled={busy} onClick={() => { setEditorOpen(false); void generate(); }}><BookOpen size={15} />Generate preview</button></div>
+      {invalidFill && <p className="note" role="alert"><Info size={14} />A result value is too long or contains unsupported brackets.</p>}
+      <div className="actions"><button type="button" onClick={() => { setFillValues({}); writePrintFill(workflow.domain, workflow.id, value.recordKey, {}); setPdfId(''); }}>Reset to System DB</button><button type="button" onClick={() => setEditorOpen(false)}>Cancel</button><button className="primary" type="button" disabled={busy || invalidFill} onClick={() => { setEditorOpen(false); void generate(); }}><BookOpen size={15} />Generate preview</button></div>
     </section>}
+    {conflict && <ConflictDialog
+      worksheet={worksheet}
+      changedFields={conflict.changedFields}
+      fields={printable}
+      existingCount={conflict.existingPdfIds.length}
+      busy={busy}
+      onCancel={() => setConflict(null)}
+      onConfirm={() => void confirmReplacement()}
+    />}
     {rinse && <fieldset className="method">
       <legend>Rinse test method</legend>
       <label><input type="radio" name={`${CV_METHOD_CONTROL_ID}-${value.recordKey}`} value="pour-plate" checked={method === 'pour-plate'} onChange={() => { setMethod('pour-plate'); setPdfId(''); }} />Pour Plate <small>renders on the approved PW/PRW template family</small></label>
@@ -2045,6 +2213,36 @@ function PdfViewer({ title, src, onClose, children }: { title: string; src: stri
       <button ref={close} className="viewer-close" type="button" onClick={onClose}><X size={16} />Close</button>
     </header>
     <iframe className="viewer-frame" title={`Generated PDF, ${title}`} src={src} />
+  </div>;
+}
+
+function ConflictDialog({ worksheet, changedFields, fields, existingCount, busy, onCancel, onConfirm }: {
+  worksheet: string;
+  changedFields: string[];
+  fields: ReturnType<typeof printableFields>;
+  existingCount: number;
+  busy: boolean;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  const dialog = useRef<HTMLElement | null>(null);
+  const close = useRef<HTMLButtonElement | null>(null);
+  useDialogFocus(true, onCancel, dialog, close);
+  const displayLabels = [...new Set(changedFields.map((key) => printFieldLabel(key, fields)))];
+  return <div className="scrim" role="presentation">
+    <section ref={dialog} className="dialog" role="dialog" aria-modal="true" aria-labelledby="conflict-title">
+      <Info size={22} aria-hidden="true" />
+      <div>
+        <h2 id="conflict-title">Review document replacement</h2>
+        <p>Worksheet <span className="data">{worksheet}</span> already has a generated document. The reviewed values differ in:</p>
+        <ul>{(displayLabels.length ? displayLabels : ['Other reviewed values']).map((label) => <li key={label}>{label}</li>)}</ul>
+        <p>{existingCount} existing generated version{existingCount === 1 ? '' : 's'} will be superseded only after the new document is complete.</p>
+      </div>
+      <div className="row">
+        <button ref={close} type="button" className="quiet" onClick={onCancel}>Cancel</button>
+        <button type="button" className="primary" disabled={busy} onClick={onConfirm}>{busy ? 'Replacing...' : 'Replace reviewed document'}</button>
+      </div>
+    </section>
   </div>;
 }
 
@@ -2248,7 +2446,7 @@ function Loading() { return <div className="page"><p className="state is-loading
 
 function display(value: unknown) {
   if (Array.isArray(value)) return `${value.length} items`;
-  if (typeof value === 'object') return JSON.stringify(value);
+  if (value && typeof value === 'object') return 'Available';
   return String(value);
 }
 

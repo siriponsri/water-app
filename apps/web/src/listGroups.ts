@@ -7,6 +7,7 @@ export type ListGroup = {
   key: ListWorkKey;
   building: string;
   buildingSegment: string;
+  domain: Workflow['domain'];
   label: string;
   workflowId: Workflow['id'];
   pdfWorkflow?: string;
@@ -43,16 +44,26 @@ function describe(workflow: Workflow, item: SearchItem) {
   return { label: 'Rinse · Method not set', key: 'cv:rinse:unknown' };
 }
 
-export function groupListItems(workflow: Workflow, items: SearchItem[], groupBy: 'building' | 'work' = 'building'): ListGroup[] {
+export function groupListItems(
+  workflow: Workflow,
+  items: SearchItem[],
+  groupBy: 'building' | 'work' = 'building',
+  scopedBuilding?: string
+): ListGroup[] {
   const groups = new Map<string, ListGroup>();
   items.forEach((item) => {
     const buildingSegment = buildingFilterSegment(item.building);
     const work = describe(workflow, item);
-    const key = groupBy === 'work' ? work.key : `${buildingSegment}:${work.key}`;
+    /* Work labels repeat across domains; include the logical domain in the
+       React key so an all-domain registry never merges or collides groups. */
+    const key = groupBy === 'work'
+      ? `${workflow.domain}:${work.key}`
+      : `${workflow.domain}:${buildingSegment}:${work.key}`;
     const group = groups.get(key) || {
       key,
-      building: groupBy === 'work' ? 'All locations' : buildingLabel(item.building),
-      buildingSegment: groupBy === 'work' ? 'ALL' : buildingSegment,
+      building: groupBy === 'work' ? (scopedBuilding ? buildingLabel(scopedBuilding) : 'All locations') : buildingLabel(item.building),
+      buildingSegment: groupBy === 'work' ? (scopedBuilding ? buildingFilterSegment(scopedBuilding) : 'ALL') : buildingSegment,
+      domain: workflow.domain,
       label: work.label,
       workflowId: workflow.id,
       cvMethod: work.cvMethod,
@@ -70,8 +81,12 @@ export function groupListItems(workflow: Workflow, items: SearchItem[], groupBy:
     if (building) return building;
     /* Present the physical work sequence, not alphabetic English labels. */
     const order = ['cv:contact', 'cv:rinse:pour', 'cv:rinse:membrane'];
-    const left = order.indexOf(a.key.split(':').slice(1).join(':'));
-    const right = order.indexOf(b.key.split(':').slice(1).join(':'));
+    const workKey = (group: ListGroup) => group.workflowId !== 'cv'
+      ? group.workflowId
+      : group.cvMethod === 'contact-plate' ? 'cv:contact'
+        : group.cvMethod === 'pour-plate' ? 'cv:rinse:pour' : 'cv:rinse:membrane';
+    const left = order.indexOf(workKey(a));
+    const right = order.indexOf(workKey(b));
     if (left >= 0 || right >= 0) return (left < 0 ? order.length : left) - (right < 0 ? order.length : right);
     return a.label.localeCompare(b.label);
   });

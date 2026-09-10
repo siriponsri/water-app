@@ -67,11 +67,11 @@ check(/robocopy/i.test(launcher),
 
 /* The per-machine state must never be copied down from the master, or every
    PC inherits another machine's environment, port file and audit log. */
-for (const excluded of ['.venv', 'node_modules', 'pdfs', 'words']) {
+for (const excluded of ['.venv', 'node_modules', '.agent-bus', 'output', 'pdfs', 'words']) {
   check(new RegExp(`/XD[^\\n]*"${excluded.replace('.', '\\.')}"`).test(launcher),
     `START-ANF3.bat must exclude ${excluded}/ from the copy`);
 }
-for (const excluded of ['.anf3-port', 'activity-log.jsonl', 'log-forward.json']) {
+for (const excluded of ['.anf3-port', 'activity-log.jsonl', 'log-forward.json', 'OVERNIGHT_LUNA.md', 'luna-overnight.log']) {
   check(new RegExp(`/XF[^\\n]*"${excluded.replace(/\./g, '\\.')}"`).test(launcher),
     `START-ANF3.bat must exclude ${excluded} from the copy`);
 }
@@ -93,12 +93,55 @@ check(/:wait_for_server/.test(launcher) && /\/api\/status/.test(launcher),
 
 check(/8000\.\.8039/.test(launcher) && /TcpClient/.test(launcher) && /\/api\/status/.test(launcher),
   'START-ANF3.bat must scan the full server port range with a fast TCP check and verify ANF3 status');
+check(/status -eq 'running'/.test(launcher) && /converterAvailable -eq \$true/.test(launcher) && /\$null -ne \$body\.folders/.test(launcher),
+  'START-ANF3.bat must require ANF3 identity/state/folders and an available converter before reusing a service');
+check(/call :check_server_converter\s+if errorlevel 1 goto :converter_missing\s+goto :open_server/.test(launcher),
+  'START-ANF3.bat must re-check converter health on the already-running reuse path');
 
 check(!/for \/l %%P in \(8000,1,8039\)/.test(launcher),
   'START-ANF3.bat must not spawn a separate PowerShell probe for every port');
 
 check(/\.anf3-launch\.lock/.test(launcher),
   'START-ANF3.bat must serialize concurrent local refresh/start operations');
+
+check(/owner\.txt/.test(launcher) && /Win32_Process/.test(launcher),
+  'START-ANF3.bat must record and inspect the owning launcher process');
+check(/ParentProcessId/.test(launcher),
+  'START-ANF3.bat must record the batch owner rather than the PowerShell helper PID');
+check(/START-ANF3\[\.\]bat/.test(launcher) && /rmdir \/s \/q/.test(launcher),
+  'START-ANF3.bat must reclaim an abandoned lock but preserve an active launcher lock');
+
+/* Deterministic local model of the batch decision: malformed/missing ownership
+   is stale, while a live launcher PID remains protected. */
+const lockDecision = ({ owner, activePids }) => {
+  if (owner === null) return 'busy'; // mkdir succeeded; owner initialization is still in flight
+  const match = /^([0-9]+)\|/.exec(owner || '');
+  return match && activePids.has(Number(match[1])) ? 'busy' : 'stale';
+};
+check(lockDecision({ owner: null, activePids: new Set() }) === 'busy',
+  'lock model must treat a missing owner file as an active initialization window');
+check(lockDecision({ owner: '4210|PC\\user', activePids: new Set([4210]) }) === 'busy',
+  'lock model must keep a genuinely active launcher lock protected');
+check(lockDecision({ owner: '4210|PC\\user', activePids: new Set() }) === 'stale',
+  'lock model must classify an abandoned launcher lock as stale');
+check(lockDecision({ owner: 'legacy owner text', activePids: new Set([4210]) }) === 'stale',
+  'lock model must recover a legacy/malformed lock without a PID');
+
+/* Negative health models mirror the conservative PowerShell predicate used by
+   the batch file. A 200 response alone is never sufficient for reuse. */
+const healthyStatus = (body, httpStatus = 200) => httpStatus === 200
+  && body?.status === 'running'
+  && body?.converterAvailable === true
+  && body?.folders !== null
+  && body?.folders !== undefined;
+check(healthyStatus({ status: 'running', converterAvailable: true, folders: {} }),
+  'health model must accept a complete ANF3 status');
+check(!healthyStatus({ status: 'ok', converterAvailable: true, folders: {} }),
+  'health model must reject a non-ANF3 state even with HTTP 200');
+check(!healthyStatus({ status: 'running', converterAvailable: false, folders: {} }),
+  'health model must reject a service without a converter');
+check(!healthyStatus({ status: 'running', converterAvailable: true }),
+  'health model must reject a status response without ANF3 identity fields');
 
 check(!/Starting from the share drive instead/i.test(launcher),
   'START-ANF3.bat must not fall back to starting Flask from the UNC share after copy failure');

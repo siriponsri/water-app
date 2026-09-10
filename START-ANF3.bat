@@ -63,6 +63,8 @@ if defined FOUND (
   ) else (
     echo [INFO] ANF3 is already running on port !FOUND!.
   )
+  call :check_server_converter
+  if errorlevel 1 goto :converter_missing
   goto :open_server
 )
 
@@ -83,8 +85,8 @@ if errorlevel 1 goto :busy_server
 
 echo [1/2] Copying the release to this PC...
 robocopy "%APP_DIR%." "%LOCAL_DIR%." /MIR /NFL /NDL /NJH /NJS /NP /R:1 /W:1 ^
-  /XD ".venv" "node_modules" ".git" ".uv-cache" "pdfs" "words" "release" "shots" "__pycache__" ".anf3-launch.lock" ^
-  /XF ".anf3-port" "activity-log.jsonl" "log-forward.json"
+  /XD ".venv" "node_modules" ".git" ".uv-cache" ".agent-bus" "output" "pdfs" "words" "release" "shots" "__pycache__" ".anf3-launch.lock" ^
+  /XF ".anf3-port" "activity-log.jsonl" "log-forward.json" "OVERNIGHT_LUNA.md" "luna-overnight.log"
 if errorlevel 8 (
   call :release_lock
   echo.
@@ -259,7 +261,7 @@ set "STATE_DIR=%~1"
 rem Use one PowerShell process for the whole range. The former nested loop
 rem launched PowerShell + an HTTP timeout once per port, which looked frozen
 rem for tens of seconds before the server was even started.
-for /f "usebackq delims=" %%P in (`powershell -NoProfile -NonInteractive -Command "$ports=@(); $path='%STATE_DIR%.anf3-port'; if(Test-Path -LiteralPath $path){$saved=(Get-Content -LiteralPath $path -TotalCount 1).Trim(); if($saved -match '^\d+$'){$ports+=[int]$saved}}; $ports+=8000..8039; foreach($port in ($ports|Select-Object -Unique)){ $client=New-Object Net.Sockets.TcpClient; try{$task=$client.ConnectAsync('127.0.0.1',[int]$port); if(-not $task.Wait(50) -or -not $client.Connected){continue}; try{$reply=Invoke-WebRequest -UseBasicParsing -TimeoutSec 1 ('http://127.0.0.1:'+$port+'/api/status'); if($reply.StatusCode -eq 200){Write-Output $port; break}}catch{}}finally{$client.Dispose()}}"`) do set "FOUND=%%P"
+for /f "usebackq delims=" %%P in (`powershell -NoProfile -NonInteractive -Command "$ports=@(); $path='%STATE_DIR%.anf3-port'; if(Test-Path -LiteralPath $path){$saved=(Get-Content -LiteralPath $path -TotalCount 1).Trim(); if($saved -match '^\d+$'){$ports+=[int]$saved}}; $ports+=8000..8039; foreach($port in ($ports|Select-Object -Unique)){ $client=New-Object Net.Sockets.TcpClient; try{$task=$client.ConnectAsync('127.0.0.1',[int]$port); if(-not $task.Wait(50) -or -not $client.Connected){continue}; try{$reply=Invoke-WebRequest -UseBasicParsing -TimeoutSec 1 ('http://127.0.0.1:'+$port+'/api/status'); $body=$reply.Content|ConvertFrom-Json; if($reply.StatusCode -eq 200 -and $body.status -eq 'running' -and $body.converterAvailable -eq $true -and $null -ne $body.folders){Write-Output $port; break}}catch{}}finally{$client.Dispose()}}"`) do set "FOUND=%%P"
 exit /b 0
 
 rem A recorded port that is occupied but not ANF3 is a stop condition for a
@@ -292,15 +294,23 @@ exit /b 1
 exit /b 0
 
 :check_server_converter
-powershell -NoProfile -NonInteractive -Command "try { $r=Invoke-RestMethod -TimeoutSec 2 'http://127.0.0.1:%FOUND%/api/status'; if($r.converterAvailable -eq $true){ exit 0 }; exit 1 } catch { exit 1 }" >nul 2>&1
+powershell -NoProfile -NonInteractive -Command "try { $r=Invoke-RestMethod -TimeoutSec 2 'http://127.0.0.1:%FOUND%/api/status'; if($r.status -eq 'running' -and $r.converterAvailable -eq $true -and $null -ne $r.folders){ exit 0 }; exit 1 } catch { exit 1 }" >nul 2>&1
 exit /b %errorlevel%
 
 rem ---------------------------------------------------------------------------
 :acquire_lock
 if not exist "%LOCAL_DIR%" mkdir "%LOCAL_DIR%" >nul 2>&1
 mkdir "%LOCAL_DIR%.anf3-launch.lock" >nul 2>&1
-if errorlevel 1 exit /b 1
->"%LOCAL_DIR%.anf3-launch.lock\owner.txt" echo %COMPUTERNAME%\%USERNAME% %DATE% %TIME%
+if errorlevel 1 (
+  powershell -NoProfile -NonInteractive -Command "$owner=Join-Path '%LOCAL_DIR%.anf3-launch.lock' 'owner.txt'; if(-not (Test-Path -LiteralPath $owner)){exit 1}; $text=(Get-Content -LiteralPath $owner -TotalCount 1); $match=[regex]::Match($text,'^([0-9]+)\|'); if(-not $match.Success){exit 0}; $ownerPid=[int]$match.Groups[1].Value; $p=Get-CimInstance Win32_Process -Filter ('ProcessId='+$ownerPid) -ErrorAction SilentlyContinue; if($p -and $p.Name -ieq 'cmd.exe' -and $p.CommandLine -match '(?i)START-ANF3[.]bat'){exit 1}; exit 0" >nul 2>&1
+  if errorlevel 1 exit /b 1
+  rmdir /s /q "%LOCAL_DIR%.anf3-launch.lock" >nul 2>&1
+  mkdir "%LOCAL_DIR%.anf3-launch.lock" >nul 2>&1
+  if errorlevel 1 exit /b 1
+)
+powershell -NoProfile -NonInteractive -Command "$self=Get-CimInstance Win32_Process -Filter ('ProcessId='+$PID) -ErrorAction SilentlyContinue; if($self){$self.ParentProcessId}else{0}" >"%LOCAL_DIR%.anf3-launch.lock\owner.txt" 2>nul
+for /f "usebackq delims=" %%P in ("%LOCAL_DIR%.anf3-launch.lock\owner.txt") do >"%LOCAL_DIR%.anf3-launch.lock\owner.txt.tmp" echo %%P^|%COMPUTERNAME%\%USERNAME% %DATE% %TIME%
+move /y "%LOCAL_DIR%.anf3-launch.lock\owner.txt.tmp" "%LOCAL_DIR%.anf3-launch.lock\owner.txt" >nul 2>&1
 set "LOCK_HELD=1"
 exit /b 0
 

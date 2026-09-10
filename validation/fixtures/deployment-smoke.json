@@ -1,0 +1,36 @@
+{
+  "water": {
+    "pw-prw": {
+      "Building 10": [{"data":{"items":[{"building":"Building 10"}],"nextCursor":"pw-2"}}, {"data":{"items":[],"nextCursor":""}}],
+      "Building 12": [{"data":{"items":[{"building":"B12"}],"nextCursor":""}}],
+      "Building 16": [{"data":{"items":[{"building":"16"}],"nextCursor":""}}],
+      "Other": [{"data":{"items":[{"building":"Building 19"}],"nextCursor":""}}]
+    },
+    "wfi-pus": {
+      "Building 16": [{"data":{"items":[{"building":"Building 16"}],"nextCursor":""}}],
+      "Other": [{"data":{"items":[],"nextCursor":""}}]
+    }
+  },
+  "air": {
+    "em-air": {
+      "Building 10": [{"data":{"items":[],"nextCursor":""}}],
+      "Building 12": [{"data":{"items":[],"nextCursor":""}}],
+      "Building 16": [{"data":{"items":[],"nextCursor":""}}],
+      "Other": [{"data":{"items":[{"building":"Other"}],"nextCursor":""}}]
+    },
+    "compressed-air": {
+      "Building 10": [{"data":{"items":[],"nextCursor":""}}],
+      "Building 12": [{"data":{"items":[],"nextCursor":""}}],
+      "Building 16": [{"data":{"items":[],"nextCursor":""}}],
+      "Other": [{"data":{"items":[],"nextCursor":""}}]
+    }
+  },
+  "cv": {
+    "cv": {
+      "Building 10": [{"data":{"items":[{"building":"B10","worksheetNo":"CV-26-B10-0001"}],"nextCursor":""}}],
+      "Building 12": [{"data":{"items":[],"nextCursor":""}}],
+      "Building 16": [{"data":{"items":[{"building":"Building 16","worksheetNo":"CV-26-B16-0001"}],"nextCursor":""}}],
+      "Other": [{"data":{"items":[{"building":"Building 19","worksheetNo":"CV-26-OT-0001"}],"nextCursor":""}}]
+    }
+  }
+}

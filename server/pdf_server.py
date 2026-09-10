@@ -101,6 +101,7 @@ WINDOWS_DEVICE_NAMES = {
 CONVERSION_LOCK = threading.Lock()
 DOCUMENT_GENERATION_LOCK = threading.Lock()
 TEMPLATE_HASH_CACHE = {}
+DOCX_RENDERER_VERSION = '2026-09-11-r1'
 
 # Form type folders
 FORM_FOLDERS = [
@@ -421,20 +422,24 @@ def sanitize_data_for_xml(data):
 # Template Processing
 # ============================================
 
-def _apply_replacements(content, data):
-    """Apply placeholder replacements to XML content string. Returns modified content."""
+def _replace_xml_placeholders(content, data):
+    """Replace placeholders without flattening nested text-box paragraphs."""
     replaced_count = 0
 
-    def process_section(match, tag_format):
+    def process_section(section, tag_format):
         nonlocal replaced_count
-        section = match.group(0)
-        t_pattern = r'(<w:t[^>]*>)([^<]*)(</w:t>)'
+        t_pattern = r'(<w:t\b[^>]*>)([^<]*)(</w:t>)'
         t_matches = list(re.finditer(t_pattern, section))
         if not t_matches:
             return section
         full_text = ''.join(m.group(2) for m in t_matches)
         full_text = re.sub(r'&lt;\s+', '&lt;', full_text)
         full_text = re.sub(r'\s+&gt;', '&gt;', full_text)
+        # The CV Contact template repeats this placeholder in one text box;
+        # keep one visible date while retaining the choice/fallback shapes.
+        full_text = full_text.replace(
+            '&lt;samplingDate&gt;&lt;samplingDate&gt;', '&lt;samplingDate&gt;'
+        )
         original = full_text
         for key, value in data.items():
             patterns = [tag_format.format(key)]
@@ -449,18 +454,48 @@ def _apply_replacements(content, data):
         if full_text == original:
             return section
         first_done = [False]
-        def replacer(m):
+
+        def replacer(match):
             if not first_done[0]:
                 first_done[0] = True
-                return m.group(1) + full_text + m.group(3)
-            return m.group(1) + m.group(3)
+                return match.group(1) + full_text + match.group(3)
+            return match.group(1) + match.group(3)
+
         return re.sub(t_pattern, replacer, section)
 
-    content = re.sub(r'<w:txbxContent>.*?</w:txbxContent>',
-                     lambda m: process_section(m, '&lt;{}&gt;'), content, flags=re.DOTALL)
-    content = re.sub(r'<w:p\b[^>]*>.*?</w:p>',
-                     lambda m: process_section(m, '<{}>'), content, flags=re.DOTALL)
-    return content, replaced_count
+    def process_textbox(match):
+        textbox = match.group(0)
+        return process_section(textbox, '&lt;{}&gt;')
+
+    # Mask processed text boxes while handling ordinary paragraphs. Otherwise
+    # the outer paragraph also consumes every nested <w:t> and duplicates text.
+    protected = []
+
+    def protect_textbox(match):
+        token = f'__ANF3_TEXTBOX_{len(protected)}__'
+        protected.append(process_textbox(match))
+        return token
+
+    masked = re.sub(
+        r'<w:txbxContent>.*?</w:txbxContent>',
+        protect_textbox,
+        content,
+        flags=re.DOTALL
+    )
+    masked = re.sub(
+        r'<w:p\b[^>]*>.*?</w:p>',
+        lambda paragraph: process_section(paragraph.group(0), '<{}>'),
+        masked,
+        flags=re.DOTALL
+    )
+    for index, textbox in enumerate(protected):
+        masked = masked.replace(f'__ANF3_TEXTBOX_{index}__', textbox)
+    return masked, replaced_count
+
+
+def _apply_replacements(content, data):
+    """Apply placeholder replacements to XML content string."""
+    return _replace_xml_placeholders(content, data)
 
 
 def _make_ids_unique(xml_fragment, page_idx):
@@ -500,9 +535,13 @@ def build_multipage_docx(template_path, output_path, pages_data):
         xml_before    = original_xml[:body_open]
         xml_after     = original_xml[body_end:]
 
-        # Section break paragraph inserted between pages (continuous type forces new page in floating layout)
+        # Section break paragraph inserted between pages. Copy only the
+        # section properties' children; retaining the source closing tag here
+        # creates malformed XML and makes Word reject multipage documents.
+        sect_pr_end = final_sectPr.rfind('</w:sectPr>')
+        sect_pr_children = final_sectPr[final_sectPr.find('>') + 1:sect_pr_end]
         page_break_para = '<w:p><w:pPr><w:sectPr><w:type w:val="nextPage"/>' + \
-                          final_sectPr[final_sectPr.find('>') + 1:] + \
+                          sect_pr_children + \
                           '</w:sectPr></w:pPr></w:p>'
 
         assembled_parts = []
@@ -546,54 +585,8 @@ def replace_placeholders_in_file(template_path, output_path, data):
         # Extract docx
         with zipfile.ZipFile(template_path, 'r') as zip_ref:
             zip_ref.extractall(temp_dir)
-        
+
         replaced_count = 0
-        
-        def process_section(match, tag_format):
-            nonlocal replaced_count
-            section = match.group(0)
-            
-            t_pattern = r'(<w:t[^>]*>)([^<]*)(</w:t>)'
-            t_matches = list(re.finditer(t_pattern, section))
-            
-            if not t_matches:
-                return section
-            
-            # Combine all text
-            full_text = ''.join(m.group(2) for m in t_matches)
-            
-            # Normalize spaces inside tag brackets (handles "< tag >" → "<tag>")
-            full_text = re.sub(r'&lt;\s+', '&lt;', full_text)
-            full_text = re.sub(r'\s+&gt;', '&gt;', full_text)
-            
-            original = full_text
-            
-            # Replace tags - empty tags get cleared completely
-            for key, value in data.items():
-                replacement = str(value) if value else ''  # Empty value = clear tag
-                patterns = [tag_format.format(key)]
-                escaped_pattern = f'&lt;{key}&gt;'
-                if escaped_pattern not in patterns:
-                    patterns.append(escaped_pattern)
-                for pattern in patterns:
-                    if pattern in full_text:
-                        full_text = full_text.replace(pattern, replacement)
-                        replaced_count += 1
-                        break
-            
-            if full_text == original:
-                return section
-            
-            # Put all text in first w:t, empty others
-            first_done = [False]
-            def replacer(m):
-                if not first_done[0]:
-                    first_done[0] = True
-                    return m.group(1) + full_text + m.group(3)
-                else:
-                    return m.group(1) + m.group(3)
-            
-            return re.sub(t_pattern, replacer, section)
         
         # Process document, headers, footers and other Word XML parts. Some
         # controlled templates keep record-level fields in a header/footer;
@@ -611,18 +604,8 @@ def replace_placeholders_in_file(template_path, output_path, data):
             with open(xml_path, 'r', encoding='utf-8') as f:
                 content = f.read()
 
-            content = re.sub(
-                r'<w:txbxContent>.*?</w:txbxContent>',
-                lambda m: process_section(m, '&lt;{}&gt;'),
-                content,
-                flags=re.DOTALL
-            )
-            content = re.sub(
-                r'<w:p\b[^>]*>.*?</w:p>',
-                lambda m: process_section(m, '<{}>'),
-                content,
-                flags=re.DOTALL
-            )
+            content, replaced = _replace_xml_placeholders(content, data)
+            replaced_count += replaced
 
             with open(xml_path, 'w', encoding='utf-8') as f:
                 f.write(content)
@@ -922,6 +905,48 @@ def _unresolved_placeholders(path):
     return sorted(set(placeholders))
 
 
+def _is_nonempty_file(path):
+    try:
+        return os.path.isfile(path) and os.path.getsize(path) > 0
+    except OSError:
+        return False
+
+
+def _is_valid_pdf(path):
+    """Reject non-empty cache files that are not complete PDF containers."""
+    try:
+        with open(path, 'rb') as source:
+            if source.read(5) != b'%PDF-':
+                return False
+            source.seek(-min(1024, os.path.getsize(path)), os.SEEK_END)
+            return b'%%EOF' in source.read()
+    except (OSError, ValueError):
+        return False
+
+
+def _cache_entry_is_current(workflow, worksheet_no, pdf_id, pdf_path,
+                            metadata_path, word_path):
+    if not (_is_valid_pdf(pdf_path) and _is_nonempty_file(metadata_path)
+            and _is_nonempty_file(word_path)):
+        return False
+    if not zipfile.is_zipfile(word_path):
+        return False
+    try:
+        with open(metadata_path, 'r', encoding='utf-8') as source:
+            metadata = json.load(source)
+        if not isinstance(metadata, dict):
+            return False
+        return (
+            metadata.get('pdfId') == pdf_id and
+            metadata.get('workflow') == workflow and
+            metadata.get('filename') == f'{worksheet_no}.pdf' and
+            metadata.get('status') == 'ready' and
+            metadata.get('rendererVersion') == DOCX_RENDERER_VERSION
+        )
+    except (OSError, ValueError, zipfile.BadZipFile):
+        return False
+
+
 def _worksheet_artifact_conflicts(workflow, worksheet_no, pdf_id):
     """Return ready artifact ids for this worksheet with different content."""
     folder = os.path.join(PDFS_DIR, workflow)
@@ -938,9 +963,34 @@ def _worksheet_artifact_conflicts(workflow, worksheet_no, pdf_id):
             continue
         if (metadata.get('status') == 'ready' and
                 metadata.get('filename') == f'{worksheet_no}.pdf' and
+                PDF_ID_RE.fullmatch(str(metadata.get('pdfId') or '')) and
                 metadata.get('pdfId') != pdf_id):
             conflicts.append(metadata.get('pdfId'))
     return sorted(conflicts)
+
+
+def _field_hashes(document_data):
+    """Keep conflict comparison auditable without storing printable values."""
+    return {
+        str(key): hashlib.sha256(json.dumps(value, ensure_ascii=False,
+                                             sort_keys=True,
+                                             separators=(',', ':')).encode('utf-8')).hexdigest()
+        for key, value in document_data.items()
+    }
+
+
+def _worksheet_changed_fields(workflow, conflict_ids, document_data):
+    current = _field_hashes(document_data)
+    changed = set()
+    for conflict_id in conflict_ids:
+        metadata, _path = _load_pdf_metadata(conflict_id)
+        previous = metadata.get('fieldHashes') if isinstance(metadata, dict) else None
+        if not isinstance(previous, dict):
+            changed.update(current)
+            continue
+        changed.update(key for key in set(current) | set(previous)
+                       if current.get(key) != previous.get(key))
+    return sorted(changed)
 
 
 def _pdf_paths(workflow, pdf_id):
@@ -965,6 +1015,15 @@ def _replace_artifact_set(promotions, removals):
     """Promote a completed document set, restoring every prior byte on failure."""
     backups = []
     staged = []
+
+    def safe_remove(path):
+        try:
+            os.remove(path)
+        except OSError:
+            # A failed cleanup must not strand a .rollback sidecar when the
+            # primary remove operation was interrupted or fault-injected.
+            os.unlink(path)
+
     try:
         for source, destination in promotions:
             backup = destination + '.rollback'
@@ -982,7 +1041,7 @@ def _replace_artifact_set(promotions, removals):
         for destination in reversed(staged):
             try:
                 if os.path.exists(destination):
-                    os.remove(destination)
+                    safe_remove(destination)
             except OSError:
                 pass
         for backup, destination in reversed(backups):
@@ -994,14 +1053,12 @@ def _replace_artifact_set(promotions, removals):
         raise
 
     # Reaching this point means the new DOCX/PDF/metadata set is complete.
-    # Cleanup must not turn a successful commit into a rollback: deleting one
-    # backup and then failing would make the original set impossible to restore.
-    # A leftover rollback file is recoverable housekeeping, while the promoted
-    # artifact set remains internally coherent and available to the caller.
+    # Cleanup is deliberately best-effort: a superseded artifact may remain
+    # usable, but it must never make the new set inconsistent or return 500.
     for backup, _destination in backups:
         try:
             if os.path.exists(backup):
-                os.remove(backup)
+                safe_remove(backup)
         except OSError:
             pass
 
@@ -1013,6 +1070,8 @@ def _load_pdf_metadata(pdf_id):
         if (_is_file_within(pdf_path, workflow_root) and
                 _is_file_within(metadata_path, workflow_root)):
             try:
+                if not _is_nonempty_file(pdf_path):
+                    continue
                 with open(metadata_path, 'r', encoding='utf-8') as source:
                     metadata = json.load(source)
                 if not isinstance(metadata, dict):
@@ -1154,6 +1213,7 @@ def create_pdf():
     # DOCX write, conversion and metadata commit as one local transaction.
     with DOCUMENT_GENERATION_LOCK:
         existing_ids = _worksheet_artifact_conflicts(workflow, worksheet_no, pdf_id)
+        changed_fields = _worksheet_changed_fields(workflow, existing_ids, document_data) if existing_ids else []
         if existing_ids:
             valid_replace = (
                 replace_requested and
@@ -1168,13 +1228,14 @@ def create_pdf():
                     'worksheetNo': worksheet_no,
                     'workflow': workflow,
                     'requestedPdfId': pdf_id,
-                    'existingPdfIds': existing_ids
+                    'existingPdfIds': existing_ids,
+                    'changedFields': changed_fields
                 }), 409
 
         # A metadata/PDF cache entry without its worksheet DOCX is incomplete;
         # regenerate the pair instead of reporting a false cache hit.
-        if (os.path.isfile(pdf_path) and os.path.isfile(metadata_path) and
-                os.path.isfile(word_path)):
+        if _cache_entry_is_current(workflow, worksheet_no, pdf_id, pdf_path,
+                                   metadata_path, word_path):
             return jsonify({'pdfId': pdf_id, 'status': 'ready', 'cached': True})
 
         temporary_dir = tempfile.mkdtemp(prefix='anf3-pdf-', dir=os.path.dirname(pdf_path))
@@ -1205,7 +1266,10 @@ def create_pdf():
                 'sourceWorkflow': PDF_WORKFLOW_REGISTRY[workflow].get('sourceWorkflow'),
                 'converter': converter,
                 'regeneratedAt': datetime.now().astimezone().isoformat() if existing_ids else None,
-                'supersededPdfIds': existing_ids if existing_ids else []
+                'supersededPdfIds': existing_ids if existing_ids else [],
+                'rendererVersion': DOCX_RENDERER_VERSION,
+                'fieldHashes': _field_hashes(document_data),
+                'changedFields': changed_fields
             }
             with open(temporary_metadata, 'w', encoding='utf-8') as target:
                 json.dump(metadata, target, ensure_ascii=False, sort_keys=True)

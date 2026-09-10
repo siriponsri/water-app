@@ -239,13 +239,13 @@ function setMediaType(type) {
     btnOther.classList.remove('toggle-btn--active');
     lotTSAGroup.style.display = '';
     lotOtherGroup.style.display = 'none';
-    document.getElementById('lotOther').value = 'N/A';
+    document.getElementById('lotOther').value = '';
   } else {
     btnTSA.classList.remove('toggle-btn--active');
     btnOther.classList.add('toggle-btn--active');
     lotTSAGroup.style.display = 'none';
     lotOtherGroup.style.display = '';
-    document.getElementById('lotTSA').value = 'N/A';
+    document.getElementById('lotTSA').value = '';
   }
 }
 
@@ -522,10 +522,10 @@ function addSampleRow() {
       </td>
       <td class="col-location"><div class="info-display" id="location-${rowId}">-</div></td>
       <td><span class="info-display" id="grade-${rowId}">-</span></td>
-      <td><input type="number" step="0.1" id="temp-${rowId}" value="20.0" style="width: 60px;"></td>
-      <td><input type="number" step="0.1" id="rh-${rowId}" value="45.0" style="width: 60px;"></td>
+      <td><input type="number" step="0.1" id="temp-${rowId}" value="" style="width: 60px;"></td>
+      <td><input type="number" step="0.1" id="rh-${rowId}" value="" style="width: 60px;"></td>
       <td><input type="text" id="result-${rowId}" value="" placeholder="CFU" class="result-input" style="width: 60px;"></td>
-      <td><input type="text" id="remark-${rowId}" value="N/A" style="width: 70px; font-size:0.8rem;"></td>
+      <td><input type="text" id="remark-${rowId}" value="" style="width: 70px; font-size:0.8rem;"></td>
       <td>
         <button type="button" class="btn-remove-row" onclick="removeSampleRow(${rowId})" title="ลบแถว">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
@@ -543,10 +543,10 @@ function addSampleRow() {
       </td>
       <td class="col-location"><div class="info-display" id="location-${rowId}">-</div></td>
       <td><span class="info-display" id="grade-${rowId}">-</span></td>
-      <td><input type="number" step="0.1" id="temp-${rowId}" value="20.0" style="width: 60px;"></td>
-      <td><input type="number" step="0.1" id="rh-${rowId}" value="45.0" style="width: 60px;"></td>
+      <td><input type="number" step="0.1" id="temp-${rowId}" value="" style="width: 60px;"></td>
+      <td><input type="number" step="0.1" id="rh-${rowId}" value="" style="width: 60px;"></td>
       <td><input type="text" id="result-${rowId}" value="" placeholder="CFU" class="result-input" style="width: 60px;"></td>
-      <td><input type="text" id="remark-${rowId}" value="N/A" style="width: 70px; font-size:0.8rem;"></td>
+      <td><input type="text" id="remark-${rowId}" value="" style="width: 70px; font-size:0.8rem;"></td>
       <td>
         <button type="button" class="btn-remove-row" onclick="removeSampleRow(${rowId})" title="ลบแถว">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
@@ -651,9 +651,9 @@ function collectFormData() {
     performedDate: document.getElementById('performedDate').value,
     temp: document.getElementById('tempRoom').value,
     incNo: preserveLeadingZeros(document.getElementById('incNo').value),
-    lotTSA: currentMediaType === 'tsa' ? preserveLeadingZeros(document.getElementById('lotTSA').value) : 'N/A',
+    lotTSA: currentMediaType === 'tsa' ? preserveLeadingZeros(document.getElementById('lotTSA').value) : '',
     lotMedia: preserveLeadingZeros(document.getElementById('lotMedia').value),
-    lotOther: currentMediaType === 'other' ? preserveLeadingZeros(document.getElementById('lotOther').value) : 'N/A',
+    lotOther: currentMediaType === 'other' ? preserveLeadingZeros(document.getElementById('lotOther').value) : '',
     mfgMedia: String(document.getElementById('mfgMedia').value || '').trim(),
     expMedia: String(document.getElementById('expMedia').value || '').trim(),
     determinedDate: document.getElementById('determinedDate').value,
@@ -689,10 +689,10 @@ function collectFormData() {
         samplingTag: pointData?.samplingTag || '',
         grade: pointData?.grade || '',
         airType: pointData?.airType || '',
-        temp: document.getElementById(`temp-${rowId}`)?.value || '20.0',
-        rh: document.getElementById(`rh-${rowId}`)?.value || '45.0',
+        temp: document.getElementById(`temp-${rowId}`)?.value || '',
+        rh: document.getElementById(`rh-${rowId}`)?.value || '',
         occResult: blankMode ? '' : (document.getElementById(`result-${rowId}`)?.value || ''),
-        remark: document.getElementById(`remark-${rowId}`)?.value || 'N/A'
+        remark: document.getElementById(`remark-${rowId}`)?.value || ''
       });
     }
   });

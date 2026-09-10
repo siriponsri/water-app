@@ -1,11 +1,11 @@
 # ANF3 Implementation Output
 
-Date: 2026-09-10
+Date: 2026-09-11
 Implementer: Luna / implementation session
 Branch: `main`
 Remote: `origin/main`
-Base commit before this handoff: `a67c23f` (`docs: record implementation handoff`)
-Status: `IMPLEMENTATION_COMPLETE` for the public source checkout; `AUDIT_REQUIRED` for controlled-release verification.
+Base commit before this validation refresh: `27dc6cb`
+Status: `IMPLEMENTATION_COMPLETE` for the local source checkout; live deployment acceptance is `BLOCKED` by a read-only Water building-isolation failure.
 
 This document is the handoff to the planner and auditor session. It records the implementation, the commands actually executed, the evidence obtained, and the checks that still require controlled assets or external systems. This update also records the final portable browser-validation fixes completed after the previous handoff.
 
@@ -15,9 +15,15 @@ The local implementation is complete and the public-source verification gates pa
 
 The changes harden the supported share-drive release path, protect the local DOCX/PDF generation flow, validate placeholders across all Word XML parts, make incomplete caches regenerate safely, and make public validation usable without owner-only documents or controlled DOCX templates. The browser validation harnesses now run on the local Windows checkout, exercise the current game route, and explicitly control offline-cache state instead of depending on a Linux-only browser path or stale game selectors.
 
-No production Google Sheet, Apps Script deployment, live endpoint, controlled template, or owner-only document was modified.
+No production Google Sheet, Apps Script deployment, controlled template, or owner-only document was modified. A live endpoint was queried read-only for smoke validation and returned a building-isolation failure documented below.
 
-The final repository-level decision remains with the planner/auditor session because the controlled release package and target laboratory PC are not available in this checkout.
+The local automated gate is complete. Final release acceptance remains blocked until the deployed Water endpoint is corrected and the Owner-controlled target-machine gates are run.
+
+## VALIDATION REFRESH (2026-09-11)
+
+The repeatable local gate is `validation/run_local_validation.mjs`. With the current-worktree PDF service on port `8011`, it produced `23 PASS`, `0 FAIL`, and `3 NOT_TESTED`, with `deterministicLocalPass=true`. The report contains `VERIFIED_BY_REPOSITORY_INSPECTION`, `VERIFIED_BY_EXECUTION`, and `NOT_TESTED` evidence classes. The three informational checks are live Apps Script deployment, copied installed release, and Owner visual sign-off; they are never converted into local PASS results.
+
+The read-only live smoke then found that Water `pw-prw` with `building=Other` returned a `Building 12` item. The checked-in source excludes that building from `Other`, so this is a deployed revision/configuration mismatch. No production change was attempted.
 
 ## FILES CHANGED
 
@@ -119,15 +125,15 @@ The public audit used the typed frontend registry and active PDF server route re
 
 - Public source checks: PASS.
 - TypeScript check: PASS.
-- Frontend unit tests: PASS with only controlled-template skips.
+- Frontend unit tests: PASS, 15 files and 107 tests.
 - Production frontend build: PASS.
-- Flask/PDF server tests: PASS, 10/10.
+- Flask/PDF server tests: PASS, 28 tests.
 - Apps Script source/security and worksheet-numbering checks: PASS without deploying or mutating a live system.
 - Launcher, wiring, style, contrast, CV package, release structure, Python compilation, and whitespace checks: PASS.
 - Local browser interaction regression: PASS.
 - Local route/report screenshot audit: PASS for 9 views.
 - Local light/dark production screenshot smoke run: PASS for 6 screenshots.
-- No unresolved test failure remains in the local verification set.
+- No unresolved test failure remains in the deterministic local verification set; the live Water `Other` isolation check remains a separate external failure.
 - Generated `dist/` output was used for build/wiring verification and remains ignored by Git.
 
 ## ARTIFACTS INSPECTED
@@ -156,7 +162,7 @@ The following acceptance gates remain unverified because the required controlled
 - Word/LibreOffice conversion on the target laboratory PC;
 - clean-PC first launch from a real UNC/share-drive path;
 - concurrent launcher and busy-port behavior on a target PC;
-- deployed `/exec` endpoint behavior against non-production Sheets;
+- complete deployed `/exec` endpoint traversal; the observed live Water `pw-prw` `Other` request failed because a `Building 12` item was returned;
 - confirmation that deployed Apps Script revisions match the checked-in source;
 - controlled browser interaction and screenshot checks on the target laboratory PC, including the target PC's browser, fonts, display scaling, and first-launch conditions;
 - ten-document timing on the actual laboratory machine.
@@ -174,8 +180,8 @@ node validation/validate_non_game_contract.mjs --controlled-dir <release-directo
 1. Which controlled release directory contains the owner documents, five authoritative DOCX templates, catalog, built frontend, and release configuration for the next audit?
 2. Which non-production Apps Script deployments and test Sheets are approved for the end-to-end read/numbering/routing checks?
 3. Which converter is the supported target on each laboratory PC: Microsoft Word, LibreOffice, or both?
-4. Should the owner assign a new release version in `VERSION.txt` before publishing the share-drive package? The existing value was preserved because no new version was supplied.
-5. After controlled verification, does the planner/auditor accept the public-source implementation as `ASTRA_AUDIT_PASS`, or are further targeted corrections required?
+4. The public checkout release identity is `7.1aa`; the owner should retain that identity when assembling the copied share-drive package unless a later controlled release supersedes it.
+5. After the deployed Water revision is corrected, does the read-only live smoke pass all building scopes and allow final acceptance?
 
 ## DIFF / REGRESSION NOTES
 
@@ -184,7 +190,7 @@ node validation/validate_non_game_contract.mjs --controlled-dir <release-directo
 - Header/footer replacement and unresolved-placeholder checks are additive to the existing body replacement behavior.
 - The local generation lock is intentionally process-local and protects concurrent requests handled by this Flask process. Cross-machine or multi-process deployment coordination remains outside the supported local release model.
 - Public validation now distinguishes missing controlled assets from source defects instead of treating the public repository as if it contained owner-only assets.
-- Browser validation now uses portable executable discovery and current accessible selectors; the harness explicitly manages the offline dialog and does not leave screenshot or diagnostic artifacts in the repository.
+- Browser validation now uses portable executable discovery and current accessible selectors; local smoke evidence is kept under ignored `output/playwright/` and does not enter the release package.
 - `package-lock.json` was removed; `pnpm-lock.yaml` remains the package lock.
 - No templates, generated Word/PDF outputs, secrets, production exports, or live Apps Script deployments were staged.
 - No unrelated UI redesign, framework migration, or broad refactor was introduced.

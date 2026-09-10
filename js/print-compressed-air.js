@@ -413,7 +413,7 @@ function mapDataToTags(data, pageSamples) {
       json[`temp${idx}`]      = formatMeasurementValue(sample.temp);
       json[`rh${idx}`]        = formatMeasurementValue(sample.rh);
       json[`occResult${idx}`] = formatResultValue(sample.occResult);
-      json[`remark${idx}`]    = sample.remark || 'N/A';
+      json[`remark${idx}`]    = sample.remark || '';
     } else {
       json[`roomNo${idx}`]    = '';
       json[`grade${idx}`]     = '';
@@ -505,7 +505,7 @@ function generateCASamplesTableHTML(samples) {
           <td class="preview-table__cell preview-table__cell--center">${s.temp || '-'}</td>
           <td class="preview-table__cell preview-table__cell--center">${s.rh || '-'}</td>
           <td class="preview-table__cell preview-table__cell--center preview-table__cell--bold">${s.occResult || '-'}</td>
-          <td class="preview-table__cell">${s.remark || 'N/A'}</td>
+          <td class="preview-table__cell">${s.remark || ''}</td>
         </tr>
       `).join('')
     : '<tr><td colspan="8" class="preview-table__cell preview-table__cell--empty">No sampling data</td></tr>';

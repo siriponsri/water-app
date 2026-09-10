@@ -90,6 +90,47 @@ if (matrix) {
   warn('Controlled cabinet matrix is not in the public checkout; using the typed frontend registry as the source contract');
 }
 
+/* IDs alone can pass while columns are shifted. Compare the matrix's
+   building/work/label semantics with the typed registry as well. */
+const normalizeSemantic = (value) => String(value || '')
+  .replace(/[\u2013\u2014]/g, '-')
+  .replace(/[^a-z0-9]+/gi, '')
+  .toLowerCase();
+const typedBinders = new Map();
+const typedAppData = read('apps/web/src/appData.ts');
+for (const match of typedAppData.matchAll(/\{\s*id:\s*'([^']+)'\s*,\s*groupId:\s*'([^']+)'\s*,\s*buildingFilter:\s*'([^']+)'\s*,\s*workflowId:\s*'([^']+)'\s*,\s*label:\s*'([^']+)'/g)) {
+  typedBinders.set(match[1], { group: match[2], building: match[3], workflow: match[4], label: match[5] });
+}
+const matrixRows = activeMatrixSection.split(/\r?\n/)
+  .filter((line) => /^\| `[^`]+` \|/.test(line))
+  .map((line) => line.split('|').slice(1, -1).map((cell) => cell.trim().replace(/^`|`$/g, '')));
+const secondaryMatches = (workflow, id, value) => {
+  const text = normalizeSemantic(value);
+  if (workflow === 'em-air') return text.includes('passiveactive') || text.includes('passiveandactive') || text.includes('environmentalmonitoringair');
+  if (workflow === 'cv') return text.includes('cvselector') || text.includes('cleaningvalidationroutes');
+  if (workflow === 'pw-prw') return text.includes('allsupportedwatertypes') || text.includes('pwprwandwfipuslogicalroutes');
+  if (workflow === 'wfi-pus') return text.includes('wfipusrecords');
+  if (workflow === 'compressed-air') {
+    return id === 'b16-ca-n2'
+      ? text.includes('can2selectororall')
+      : text.includes('gastypeca') || text.includes('compressedairnitrogenroute');
+  }
+  return false;
+};
+if (matrix && matrixRows.length) {
+  for (const row of matrixRows) {
+    const [id, group, building, workflow, label, secondary] = row;
+    const typed = typedBinders.get(id);
+    assert(Boolean(typed), `Cabinet matrix row ${id} has a typed registry entry`);
+    if (!typed) continue;
+    assert(normalizeSemantic(group) === normalizeSemantic(typed.group), `${id} matrix group matches typed registry`);
+    assert(normalizeSemantic(building) === normalizeSemantic(typed.building), `${id} matrix building filter matches typed registry`);
+    assert(normalizeSemantic(workflow) === normalizeSemantic(typed.workflow), `${id} matrix workflow matches typed registry`);
+    assert(normalizeSemantic(label) === normalizeSemantic(typed.label), `${id} matrix display label matches typed registry`);
+    assert(secondaryMatches(typed.workflow, id, secondary), `${id} matrix secondary filter matches workflow scope`);
+  }
+}
+
 const manifestText = read('design-assets/manifest.json');
 let manifest;
 try {

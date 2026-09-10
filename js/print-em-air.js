@@ -419,10 +419,10 @@ function mapDataToTags(data, pageSamples) {
       json[`grade${idx}`]       = sample.grade || '';
       json[`tempRoom${idx}`]    = formatMeasurementValue(sample.tempRoom);
       json[`rhRoom${idx}`]      = formatMeasurementValue(sample.rhRoom);
-      json[`timeIn${idx}`]      = sample.timeIn || 'N/A';
-      json[`timeOut${idx}`]     = sample.timeOut || 'N/A';
+      json[`timeIn${idx}`]      = sample.timeIn || '';
+      json[`timeOut${idx}`]     = sample.timeOut || '';
       json[`occurResult${idx}`] = formatResultValue(sample.occurResult);
-      json[`remark${idx}`]      = sample.remark || 'N/A';
+      json[`remark${idx}`]      = sample.remark || '';
     } else {
       json[`roomNo${idx}`]      = '';
       json[`grade${idx}`]       = '';
@@ -515,10 +515,10 @@ function generateEMSamplesTableHTML(samples) {
           <td class="preview-table__cell">${s.grade || '-'}</td>
           <td class="preview-table__cell preview-table__cell--center">${s.tempRoom || '-'}</td>
           <td class="preview-table__cell preview-table__cell--center">${s.rhRoom || '-'}</td>
-          <td class="preview-table__cell preview-table__cell--center">${s.timeIn || 'N/A'}</td>
-          <td class="preview-table__cell preview-table__cell--center">${s.timeOut || 'N/A'}</td>
+          <td class="preview-table__cell preview-table__cell--center">${s.timeIn || ''}</td>
+          <td class="preview-table__cell preview-table__cell--center">${s.timeOut || ''}</td>
           <td class="preview-table__cell preview-table__cell--center preview-table__cell--bold">${s.occurResult || '-'}</td>
-          <td class="preview-table__cell">${s.remark || 'N/A'}</td>
+          <td class="preview-table__cell">${s.remark || ''}</td>
         </tr>
       `).join('')
     : '<tr><td colspan="10" class="preview-table__cell preview-table__cell--empty">No sampling data</td></tr>';

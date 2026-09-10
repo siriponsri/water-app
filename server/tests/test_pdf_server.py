@@ -2,6 +2,7 @@ import json
 import subprocess
 import sys
 import zipfile
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 import pytest
@@ -39,7 +40,7 @@ def client(tmp_path, monkeypatch):
         return len(pages)
 
     def fake_convert(_word_path, pdf_path):
-        Path(pdf_path).write_bytes(b'%PDF-1.4 test')
+        Path(pdf_path).write_bytes(b'%PDF-1.4 test\n%%EOF\n')
         return True, 'test converter', None
 
     monkeypatch.setattr(pdf_server, 'replace_placeholders_in_file', fake_word)
@@ -269,6 +270,26 @@ def test_placeholder_replacement_and_gate_cover_headers_and_footers(tmp_path):
         assert '02 Sep 2026' in archive.read('word/footer1.xml').decode('utf-8')
 
 
+def test_textbox_placeholder_replacement_keeps_alternate_shapes_separate(tmp_path):
+    template = Path(__file__).resolve().parents[2] / 'templates' / 'cv-contact-template.docx'
+    output = tmp_path / 'cv-contact.docx'
+
+    pdf_server.replace_placeholders_in_file(template, output, {
+        'samplingDate': '01 Sep 2026',
+        'samplingPoint04': '',
+        'samplingPoint05': '',
+        'samplingPoint06': '',
+        'samplingPoint07': '',
+    })
+
+    with zipfile.ZipFile(output) as archive:
+        document = archive.read('word/document.xml').decode('utf-8')
+    assert document.count('01 Sep 2026') == 2
+    assert '01 Sep 202601 Sep 2026' not in document
+    for key in ('samplingPoint04', 'samplingPoint05', 'samplingPoint06', 'samplingPoint07'):
+        assert key not in document
+
+
 def test_pdf_cache_is_incomplete_without_the_controlled_docx(client):
     payload = {
         'workflow': 'pw-prw',
@@ -285,6 +306,50 @@ def test_pdf_cache_is_incomplete_without_the_controlled_docx(client):
     assert regenerated.status_code == 201
     assert regenerated.get_json()['cached'] is False
     assert word_path.is_file()
+
+
+def test_pdf_cache_regenerates_stale_or_empty_artifacts(client):
+    payload = {
+        'workflow': 'pw-prw',
+        'worksheetNo': 'PW-26-0003',
+        'data': {'analyst': 'A'},
+    }
+    first = client.post('/api/pdfs', json=payload)
+    assert first.status_code == 201
+    pdf_id = first.get_json()['pdfId']
+    pdf_path, metadata_path = pdf_server._pdf_paths('pw-prw', pdf_id)
+    word_path = Path(pdf_server.WORDS_DIR) / 'pw-prw' / 'PW-26-0003.docx'
+
+    metadata = json.loads(Path(metadata_path).read_text(encoding='utf-8'))
+    metadata['rendererVersion'] = 'old-renderer'
+    Path(metadata_path).write_text(json.dumps(metadata), encoding='utf-8')
+    Path(pdf_path).write_bytes(b'')
+    word_path.write_bytes(b'')
+
+    regenerated = client.post('/api/pdfs', json=payload)
+    assert regenerated.status_code == 201
+    assert regenerated.get_json()['cached'] is False
+    assert Path(pdf_path).read_bytes().startswith(b'%PDF')
+    assert zipfile.is_zipfile(word_path)
+    refreshed = json.loads(Path(metadata_path).read_text(encoding='utf-8'))
+    assert refreshed['rendererVersion'] == pdf_server.DOCX_RENDERER_VERSION
+
+
+def test_pdf_cache_regenerates_nonempty_invalid_pdf(client):
+    payload = {
+        'workflow': 'pw-prw',
+        'worksheetNo': 'PW-26-0004',
+        'data': {'analyst': 'A'},
+    }
+    first = client.post('/api/pdfs', json=payload)
+    assert first.status_code == 201
+    pdf_path, _metadata_path = pdf_server._pdf_paths('pw-prw', first.get_json()['pdfId'])
+    Path(pdf_path).write_bytes(b'not a pdf')
+
+    regenerated = client.post('/api/pdfs', json=payload)
+    assert regenerated.status_code == 201
+    assert regenerated.get_json()['cached'] is False
+    assert Path(pdf_path).read_bytes().startswith(b'%PDF-')
 
 
 def test_controlled_replacement_requires_exact_confirmed_conflict_set(client):
@@ -304,6 +369,7 @@ def test_controlled_replacement_requires_exact_confirmed_conflict_set(client):
     assert body['worksheetNo'] == 'CV-26-B10-0001'
     assert body['workflow'] == 'cleaning-validation-contact'
     assert body['existingPdfIds'] == [first.get_json()['pdfId']]
+    assert body['changedFields'] == ['analyst']
 
     stale = client.post('/api/pdfs', json={**changed, 'regeneration': {
         'mode': 'replace', 'requestedPdfId': body['requestedPdfId'], 'existingPdfIds': []
@@ -385,9 +451,11 @@ def test_artifact_commit_keeps_new_set_when_backup_cleanup_fails(tmp_path, monke
     new_word = tmp_path / 'new.docx'
     new_pdf = tmp_path / 'new.pdf'
     new_metadata = tmp_path / 'new.json'
+    superseded = tmp_path / 'superseded.pdf'
     new_word.write_bytes(b'new word')
     new_pdf.write_bytes(b'new pdf')
     new_metadata.write_bytes(b'new metadata')
+    superseded.write_bytes(b'old superseded')
 
     real_remove = pdf_server.os.remove
 
@@ -400,9 +468,73 @@ def test_artifact_commit_keeps_new_set_when_backup_cleanup_fails(tmp_path, monke
     pdf_server._replace_artifact_set(
         ((str(new_word), str(old_word)), (str(new_pdf), str(tmp_path / 'current.pdf')),
          (str(new_metadata), str(tmp_path / 'current.json'))),
-        ()
+        (str(superseded),)
     )
 
     assert old_word.read_bytes() == b'new word'
     assert (tmp_path / 'current.pdf').read_bytes() == b'new pdf'
     assert (tmp_path / 'current.json').read_bytes() == b'new metadata'
+    assert not superseded.exists()
+    assert not list(tmp_path.glob('*.rollback'))
+
+
+def test_artifact_commit_keeps_primary_set_consistent_when_cleanup_is_unavailable(tmp_path, monkeypatch):
+    old_word = tmp_path / 'worksheet.docx'
+    old_word.write_bytes(b'old word')
+    new_word = tmp_path / 'new.docx'
+    new_pdf = tmp_path / 'new.pdf'
+    new_metadata = tmp_path / 'new.json'
+    superseded = tmp_path / 'superseded.pdf'
+    new_word.write_bytes(b'new word')
+    new_pdf.write_bytes(b'new pdf')
+    new_metadata.write_bytes(b'new metadata')
+    superseded.write_bytes(b'old superseded')
+
+    real_remove = pdf_server.os.remove
+    real_unlink = pdf_server.os.unlink
+
+    def fail_remove(path):
+        if path.endswith('.rollback'):
+            raise OSError('injected remove failure')
+        return real_remove(path)
+
+    def fail_unlink(path):
+        if path.endswith('.rollback'):
+            raise OSError('injected unlink failure')
+        return real_unlink(path)
+
+    monkeypatch.setattr(pdf_server.os, 'remove', fail_remove)
+    monkeypatch.setattr(pdf_server.os, 'unlink', fail_unlink)
+    pdf_server._replace_artifact_set(
+        ((str(new_word), str(old_word)), (str(new_pdf), str(tmp_path / 'current.pdf')),
+         (str(new_metadata), str(tmp_path / 'current.json'))),
+        (str(superseded),)
+    )
+
+    # An unavailable cleanup operation may leave isolated rollback evidence,
+    # but it must never leave the user-facing document set half old/half new.
+    assert old_word.read_bytes() == b'new word'
+    assert (tmp_path / 'current.pdf').read_bytes() == b'new pdf'
+    assert (tmp_path / 'current.json').read_bytes() == b'new metadata'
+    rollback_paths = sorted(tmp_path.glob('*.rollback'))
+    assert rollback_paths
+    assert all(path.read_bytes() == b'old word' or path.read_bytes() == b'old superseded'
+               for path in rollback_paths)
+
+
+def test_real_multipage_template_is_valid_docx(tmp_path):
+    output = tmp_path / 'em-multipage.docx'
+    pdf_server.build_multipage_docx(
+        str(Path(pdf_server.BASE_DIR) / 'templates' / 'em-template.docx'),
+        str(output),
+        [
+            {'docNo': 'AT-26-QA-0001', 'building': 'QA', 'samplingDate': '01 Sep 2026'},
+            {'docNo': 'AT-26-QA-0001', 'building': 'QA', 'samplingDate': '01 Sep 2026'},
+        ],
+    )
+
+    with zipfile.ZipFile(output) as archive:
+        document_xml = archive.read('word/document.xml')
+    root = ET.fromstring(document_xml)
+    assert len(root.findall('.//{http://schemas.openxmlformats.org/wordprocessingml/2006/main}sectPr')) >= 2
+    assert document_xml.count(b'AT-26-QA-0001') >= 2
