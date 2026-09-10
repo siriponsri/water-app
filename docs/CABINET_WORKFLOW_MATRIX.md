@@ -29,13 +29,16 @@ This document defines which binders exist. Luna must encode the same data once i
 | `b16-em-air` | B16 | Building 16 | `em-air` | Air Sampling | passive + active |
 | `b16-ca-n2` | B16 | Building 16 | `compressed-air` | CA & Nitrogen | gas type CA/N2 selector or all |
 | `b16-cv` | B16 | Building 16 | `cv` | Cleaning Validation | CV selector |
-| `other-locations` | OTHER | none at binder level | multiple | Other Locations | opens its own contents page; see below |
+| `other-water` | OTHER | `pw-prw` | Water | Other-Water | PW/PRW and WFI/PUS logical routes |
+| `other-air` | OTHER | `em-air` | Air | Other-Air | Environmental Monitoring Air route |
+| `other-ca` | OTHER | `compressed-air` | CA/N2 | Other-CA | Compressed Air / Nitrogen route |
+| `other-cv` | OTHER | `cv` | Contact/Rinse | Other-CV | Cleaning Validation routes |
 
-14 active binders. Building 11 and Building 19 share **one** orange binder on
-the shelf, the way they share one physical file; the binder opens onto a
-contents page rather than a record list.
+17 active binders. Other retains its orange physical binder family while the
+four domain binders provide unambiguous routes. Exact Building 11, Building
+19, or unknown source text remains visible on the individual record.
 
-### Inside `other-locations`
+### Legacy source-location examples
 
 | Section ID | Exact building filter | Workflow | Display label | Secondary filter |
 |---|---|---|---|---|
@@ -105,7 +108,7 @@ The actual code may refine types, but must preserve this separation. Building gr
 
 - Desktop shelf should support 3–6 normal binders without overlap.
 - Building 16 has five active binders and is the minimum density reference.
-- Other Locations is one binder; B11 and B19 are exposed inside it.
+- Other keeps its orange physical binder family but is split into Other-Water, Other-Air, Other-CA, and Other-CV; B11/B19/unknown source text remains visible on each record.
 - If a group exceeds capacity, use shelf pagination/controlled horizontal scroll with visible controls; never shrink labels below readability.
 - List view renders every active instance without pagination caused by visual shelf capacity.
 
@@ -118,4 +121,3 @@ The actual code may refine types, but must preserve this separation. Building gr
 - `#/records/water/pw-prw?building=Building%2019&waterType=PRW`
 
 Prefer stable internal IDs in code and URL-safe query encoding. Search/get APIs must accept only allowlisted normalized filters.
-

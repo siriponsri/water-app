@@ -43,6 +43,11 @@ async function initializeCvPrint() {
   }
 
   document.getElementById('usernameDisplay').textContent = username;
+  ['Comment', 'IncNo', 'Temp'].forEach(name => {
+    const el = document.getElementById('cvOverride' + name);
+    if (el) el.value = sessionStorage.getItem('cvOverride' + name) || '';
+    el?.addEventListener('input', () => sessionStorage.setItem('cvOverride' + name, el.value));
+  });
   await waterDB.init();
   cvPrintRecords = await waterDB.getAllCvRecords();
   cvPrintRecords.sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')));
@@ -235,6 +240,7 @@ function cvCommonTags(record, worksheetNo) {
     performedDate: formatDateDMY(record.performedDate) || '',
     determinedDate: formatDateDMY(record.determinedDate) || '',
     approvedDate: formatDateDMY(record.approvedDate) || '',
+    gradeControl: record.gradeControl || '',
     temp: record.temp || '',
     incNo: record.incNo || '',
     rightEM: record.rightEM || '',
@@ -263,17 +269,20 @@ function mapCvTags(record, route, pageSamples, worksheetNo) {
     const point = sample ? cvPointLabel(sample) : '';
     const result = sample ? cvSampleResult(sample) : '';
     const sampleId = sample ? String(sample.sampleId || '') : '';
-    tags[`samplingPoint${suffix}`] = point;
-    tags[`tagNo${suffix}`] = sampleId;
+    // Rinse templates use tagNo for the sampling point label. Keep the
+    // samplingPoint placeholders blank to match the authoritative DOCX.
+    const isRinse = route !== CV_PRINT_ROUTES.CONTACT_PLATE;
+    tags[`samplingPoint${suffix}`] = isRinse ? '' : point;
+    tags[`tagNo${suffix}`] = isRinse ? point : sampleId;
     if (route === CV_PRINT_ROUTES.CONTACT_PLATE) {
       tags[`Grade${suffix}`] = sample?.grade || '';
       tags[`result${suffix}`] = result;
     } else if (route === CV_PRINT_ROUTES.PW_PRW) {
-      tags[`result1${suffix}`] = result;
-      tags[`result2${suffix}`] = sample?.result2 === undefined ? '' : String(sample.result2);
-      tags[`resultAvg${suffix}`] = sample?.resultAvg === undefined ? '' : String(sample.resultAvg);
+      tags[`result1${suffix}`] = '';
+      tags[`result2${suffix}`] = '';
+      tags[`resultAvg${suffix}`] = '';
     } else {
-      tags[`result${suffix}`] = result;
+      tags[`result${suffix}`] = '';
     }
   }
   return tags;
@@ -300,10 +309,18 @@ async function createCvPdf() {
   const samples = cvSamplesForRecord(selectedCvPrintRecord);
   if (!samples.length) throw new Error('This CV record has no sample rows to print.');
   const pages = [];
+  const overrides = {};
+  const comment = document.getElementById('cvOverrideComment')?.value || '';
+  const incNo = document.getElementById('cvOverrideIncNo')?.value || '';
+  const temp = document.getElementById('cvOverrideTemp')?.value || '';
+  if (comment) overrides.comment = comment;
+  if (incNo) overrides.incNo = incNo;
+  if (temp && !Number.isNaN(Number(temp))) overrides.temp = String(Math.round(Number(temp)));
   for (let offset = 0; offset < samples.length; offset += route.samplesPerPage) {
     pages.push({
       worksheetNo,
-      ...mapCvTags(selectedCvPrintRecord, route, samples.slice(offset, offset + route.samplesPerPage), worksheetNo)
+      ...mapCvTags(selectedCvPrintRecord, route, samples.slice(offset, offset + route.samplesPerPage), worksheetNo),
+      ...overrides
     });
   }
 

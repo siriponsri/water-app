@@ -1,57 +1,31 @@
-# เริ่มใช้งาน ANF3 Laboratory Records บนเครื่องใหม่
+# เริ่มใช้ ANF3 สำหรับผู้ใช้ทั่วไป
 
-## สำหรับผู้ใช้งาน Local App
+ไฟล์นี้เป็น UTF-8 เพื่อให้อ่านภาษาไทยได้ถูกต้องใน GitHub, VS Code และ Notepad รุ่นใหม่
 
-1. แตก ZIP ไปยัง Desktop หรือ Documents
+## เปิดใช้งานครั้งแรก
+
+1. แตกไฟล์ ZIP ไว้ใน Desktop หรือ Documents
 2. ดับเบิลคลิก `START-ANF3.bat`
-3. ครั้งแรกต้องต่ออินเทอร์เน็ตเพื่อดาวน์โหลด Python runtime และ package ลงในโฟลเดอร์โปรแกรม
-4. ไม่ต้อง Run as administrator
-5. รอให้ browser เปิด `http://127.0.0.1:8000`
-6. เปิดหน้าต่าง server ค้างไว้ระหว่างใช้งาน
-7. ปิดด้วย Ctrl+C เมื่อเลิกใช้
+3. ครั้งแรกต้องเชื่อมต่ออินเทอร์เน็ตเพื่อเตรียม Python และส่วนประกอบของระบบ
+4. ไม่ต้องเลือก **Run as administrator**
+5. รอจนเบราว์เซอร์เปิด ANF3 อัตโนมัติ แล้วใช้งานได้ทันที
 
-ถ้าต้องสร้าง PDF เครื่องต้องมี Microsoft Word พร้อม `pywin32` หรือ LibreOffice รายละเอียดอยู่ใน `OWNER.md`
+หากสร้าง PDF ระบบต้องมี Microsoft Word หรือ LibreOffice ในเครื่อง หากมีข้อความแจ้งว่าไม่พบตัวแปลง PDF ให้ติดต่อผู้ดูแลระบบเพื่อให้ติดตั้งโปรแกรมดังกล่าว
 
-## สิ่งที่ทำในเว็บ
+## การใช้งานประจำ
 
-1. เลือก Water, Air หรือ Cleaning Validation
-2. เลือก workflow
-3. ค้นและเปิด record ปัจจุบันจาก System DB
-4. Preview PDF
-5. Print, Download หรือ Save to Desktop
+1. ดับเบิลคลิก `START-ANF3.bat`
+2. เลือกโฟลเดอร์/อาคาร แล้วเปิด List เพื่อค้นหา worksheet
+3. เลือก worksheet, ตรวจสอบข้อมูล, จากนั้นเลือก Print หรือ Download PDF
+4. ใช้ปุ่ม Back to records เพื่อกลับไปยัง List เดิม
 
-เว็บเป็น read-only ไม่มีการสร้าง แก้ไข ลบ หรือ Sync record งานเหล่านี้ทำใน Google Sheets ผ่าน Apps Script เท่านั้น
+หน้าต่างเซิร์ฟเวอร์อาจเปิดค้างระหว่างใช้งาน เป็นเรื่องปกติ อย่าปิดหน้าต่างนั้นจนกว่าจะเลิกใช้ระบบ
 
-## สำหรับ Owner/Developer ที่ย้ายเครื่อง
+## หากเปิดไม่ได้
 
-อ่านตามลำดับ:
+- ตรวจว่าไฟล์ทั้งหมดจาก ZIP อยู่ในโฟลเดอร์เดียวกัน
+- ตรวจการเชื่อมต่อเครือข่ายในครั้งแรก
+- เปิด `START-ANF3.bat` อีกครั้งและอ่านข้อความในหน้าต่างสีดำ
+- ส่งภาพหรือข้อความ error ให้ผู้ดูแลระบบ โดยไม่ต้องแก้ไขไฟล์เอง
 
-1. `OWNER.md` - วิธี copy/deploy Apps Script และส่งให้ผู้ใช้
-2. `PLAN.md` - requirement และ acceptance criteria
-3. `llm-wiki/index.md` - architecture, Google Sheet contract และ decision log
-4. `DESIGN.md` - design system และ interaction
-5. `TEST_PLAN.md` - test cases
-
-ติดตั้ง dependency สำหรับพัฒนาต่อ:
-
-```powershell
-pnpm install --frozen-lockfile
-.\INSTALL.bat
-```
-
-ตรวจและ build:
-
-```powershell
-rtk pnpm check
-rtk pnpm test
-rtk pnpm build
-rtk proxy .\.venv\Scripts\python.exe -m pytest server\tests -q
-```
-
-## ข้อจำกัดก่อนใช้ Production
-
-- Air/Water Web Apps ต้อง Deploy เป็น New version เพื่อรองรับ `search/get`
-- ต้องใส่ CV System `/exec` URL จริงใน `.env.production` แล้ว build ใหม่
-- CV rinse PDF ยังปิดไว้จนมี approved rinse templates
-- Growth Promotion เป็น synthetic training fixture จนกว่า Microbiology/QA จะอนุมัติ
-- ห้ามเดา URL, token, sheet mapping, SOP criteria หรือ template behavior
+ผู้ดูแลระบบควรอ่าน `OWNER_MANUAL.md` และ `OWNER_SETUP_TH.md` สำหรับการตั้งค่า Apps Script และการ deploy

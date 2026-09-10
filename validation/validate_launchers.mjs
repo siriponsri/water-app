@@ -91,8 +91,11 @@ check(/:check_converter/.test(launcher) && /LibreOffice/.test(launcher),
 check(/:wait_for_server/.test(launcher) && /\/api\/status/.test(launcher),
   'START-ANF3.bat must wait for the local service status endpoint');
 
-check(/for \/l %%P in \(8000,1,8039\)/.test(launcher),
-  'START-ANF3.bat must scan the full server port range when the recorded port is unavailable');
+check(/8000\.\.8039/.test(launcher) && /TcpClient/.test(launcher) && /\/api\/status/.test(launcher),
+  'START-ANF3.bat must scan the full server port range with a fast TCP check and verify ANF3 status');
+
+check(!/for \/l %%P in \(8000,1,8039\)/.test(launcher),
+  'START-ANF3.bat must not spawn a separate PowerShell probe for every port');
 
 check(/\.anf3-launch\.lock/.test(launcher),
   'START-ANF3.bat must serialize concurrent local refresh/start operations');

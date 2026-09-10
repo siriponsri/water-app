@@ -1337,28 +1337,12 @@ function buildPourTemplatePayload_(record, samples) {
     const s = samples[i - 1] || {};
     const n = cvPad2_(i);
 
-    p['tagNo' + n] =
-      cvString_(
-        s.tagNo !== undefined
-          ? s.tagNo
-          : s.samplingTag
-      );
+    p['tagNo' + n] = cvString_(s.samplingPoint || s.tagNo || s.samplingTag);
+    p['samplingPoint' + n] = '';
 
-    p['samplingPoint' + n] =
-      cvString_(s.samplingPoint);
-
-    p['result1' + n] =
-      cvString_(s.result1);
-
-    p['result2' + n] =
-      cvString_(s.result2);
-
-    p['resultAvg' + n] =
-      cvString_(
-        s.resultAvg !== undefined
-          ? s.resultAvg
-          : s.resultDisplay
-      );
+    p['result1' + n] = '';
+    p['result2' + n] = '';
+    p['resultAvg' + n] = '';
   }
 
   return p;
@@ -1400,22 +1384,9 @@ function buildMembraneTemplatePayload_(record, samples) {
     const s = samples[i - 1] || {};
     const n = cvPad2_(i);
 
-    p['tagNo' + n] =
-      cvString_(
-        s.tagNo !== undefined
-          ? s.tagNo
-          : s.samplingTag
-      );
-
-    p['samplingPoint' + n] =
-      cvString_(s.samplingPoint);
-
-    p['result' + n] =
-      cvString_(
-        s.result !== undefined
-          ? s.result
-          : s.resultDisplay
-      );
+    p['tagNo' + n] = cvString_(s.samplingPoint || s.tagNo || s.samplingTag);
+    p['samplingPoint' + n] = '';
+    p['result' + n] = '';
   }
 
   return p;

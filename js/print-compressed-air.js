@@ -24,11 +24,6 @@ const TEMPLATE_NAME = 'ca-template.docx';
 const FOLDER_NAME = 'compressed-air';
 const SAMPLES_PER_PAGE = 10;
 
-const SHEET_NAMES = {
-  'Routine': 'records_ca',
-  'Other': 'records_ca'
-};
-
 // Air Sync Config
 const AIR_PRINT_CONFIG = {
   SCRIPT_URL: 'https://script.google.com/macros/s/AKfycbytoaWepwl0RJLilSvShVBIMIJZ3kYpN4UEynRbdeNTEAlfOHWWkNXJTwe62-Ry_TeB/exec'
@@ -96,7 +91,6 @@ async function loadWorksheets() {
   listEl.innerHTML = '<div style="text-align: center; color: var(--ink-muted); padding: var(--space-4);">กำลังโหลด...</div>';
 
   try {
-    const sheetName = SHEET_NAMES[currentStatus] || 'records_ca';
     const scriptUrl = AIR_PRINT_CONFIG.SCRIPT_URL;
 
     if (!scriptUrl) {
@@ -104,17 +98,14 @@ async function loadWorksheets() {
       return;
     }
 
-    const url = `${scriptUrl}?action=getRecords&sheetName=${encodeURIComponent(sheetName)}`;
-    const response = await fetch(url);
-    const result = await response.json();
-
-    if (result.success && result.data) {
+    const allData = await fetchAllAirWorksheets(scriptUrl, 'compressed-air');
+    if (allData.length) {
       // Filter by status if needed
-      let filtered = result.data;
+      let filtered = allData;
       if (currentStatus !== 'Routine') {
-        filtered = result.data.filter(r => r.recordStatus === currentStatus);
+        filtered = allData.filter(r => r.recordStatus === currentStatus);
       } else {
-        filtered = result.data.filter(r => !r.recordStatus || r.recordStatus === 'Routine');
+        filtered = allData.filter(r => !r.recordStatus || r.recordStatus === 'Routine');
       }
 
       worksheets = filtered.sort((a, b) => {
@@ -131,6 +122,29 @@ async function loadWorksheets() {
   } catch (e) {
     console.error('Load worksheets error:', e);
     listEl.innerHTML = '<div style="text-align: center; color: var(--error); padding: var(--space-4);">โหลดข้อมูลไม่สำเร็จ</div>';
+  }
+}
+
+async function fetchAllAirWorksheets(scriptUrl, workflow) {
+  const items = [];
+  const seenCursors = new Set();
+  let cursor = '';
+
+  while (true) {
+    const params = new URLSearchParams({ action: 'search', workflow: workflow, limit: '100' });
+    if (cursor) params.set('cursor', cursor);
+    const response = await fetch(`${scriptUrl}?${params.toString()}`);
+    if (!response.ok) throw new Error(`Worksheet search failed (${response.status})`);
+    const result = await response.json();
+    if (!result || result.success !== true || !result.data || !Array.isArray(result.data.items)) {
+      throw new Error('Worksheet search returned an invalid response');
+    }
+    items.push(...result.data.items);
+    const nextCursor = String(result.data.nextCursor || '');
+    if (!nextCursor) return items;
+    if (seenCursors.has(nextCursor)) throw new Error('Worksheet search returned a repeated cursor');
+    seenCursors.add(nextCursor);
+    cursor = nextCursor;
   }
 }
 
@@ -163,8 +177,29 @@ function renderWorksheetList() {
 // ============================================
 // SELECT WORKSHEET
 // ============================================
-function selectWorksheet(index) {
-  selectedData = worksheets[index];
+async function selectWorksheet(index) {
+  const summary = worksheets[index];
+  if (!summary) return;
+  selectedData = null;
+  document.getElementById('btnPreview').disabled = true;
+  document.getElementById('btnPreviewPdf').disabled = true;
+  document.getElementById('btnPrintPdf').disabled = true;
+  try {
+    const response = await fetch(`${AIR_PRINT_CONFIG.SCRIPT_URL}?action=get&workflow=compressed-air&recordKey=${encodeURIComponent(summary.recordKey || summary.worksheetNo || summary.docNo)}`);
+    if (!response.ok) throw new Error(`Worksheet detail failed (${response.status})`);
+    const result = await response.json();
+    if (!result || result.success !== true || !result.data || !result.data.record || !Array.isArray(result.data.samples)) {
+      throw new Error('Worksheet detail returned an invalid response');
+    }
+    selectedData = { ...summary, ...result.data.record, samples: result.data.samples };
+  } catch (error) {
+    console.warn('Load worksheet detail failed:', error);
+    document.querySelectorAll('.worksheet-item').forEach((el) => el.classList.remove('active'));
+    document.getElementById('selectedInfo').textContent = 'Load failed — select the worksheet again to retry';
+    showEmptyState('Unable to load the current worksheet. Select it again to retry.');
+    UI.showToast('โหลดรายละเอียด Worksheet ไม่สำเร็จ — กรุณาเลือกอีกครั้งเพื่อลองใหม่', 'error');
+    return;
+  }
 
   document.querySelectorAll('.worksheet-item').forEach((el, i) => {
     el.classList.toggle('active', i === index);
@@ -375,9 +410,9 @@ function mapDataToTags(data, pageSamples) {
     if (sample) {
       json[`roomNo${idx}`]    = sample.samplingPoint || '';
       json[`grade${idx}`]     = sample.grade || '';
-      json[`temp${idx}`]      = sample.temp !== undefined ? String(sample.temp) : '';
-      json[`rh${idx}`]        = sample.rh !== undefined ? String(sample.rh) : '';
-      json[`occResult${idx}`] = sample.occResult !== undefined ? String(sample.occResult) : '';
+      json[`temp${idx}`]      = formatMeasurementValue(sample.temp);
+      json[`rh${idx}`]        = formatMeasurementValue(sample.rh);
+      json[`occResult${idx}`] = formatResultValue(sample.occResult);
       json[`remark${idx}`]    = sample.remark || 'N/A';
     } else {
       json[`roomNo${idx}`]    = '';

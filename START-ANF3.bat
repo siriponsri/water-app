@@ -26,6 +26,8 @@ if /i "%APP_DIR%"=="%LOCAL_DIR%" goto :run_here
 
 echo.
 echo ANF3 Laboratory Records
+echo   Please wait while ANF3 prepares this PC. Keep this window open
+echo   while using the application; it opens your browser automatically.
 echo   Master copy : %APP_DIR%
 echo   This PC     : %LOCAL_DIR%
 echo.
@@ -254,15 +256,10 @@ rem range used by pdf_server.py when 8000 is busy.
 :find_server
 set "FOUND="
 set "STATE_DIR=%~1"
-if exist "%STATE_DIR%.anf3-port" (
-  set /p RECORDED=<"%STATE_DIR%.anf3-port"
-  if defined RECORDED call :probe !RECORDED!
-)
-if not defined FOUND (
-  for /l %%P in (8000,1,8039) do (
-    if not defined FOUND call :probe %%P
-  )
-)
+rem Use one PowerShell process for the whole range. The former nested loop
+rem launched PowerShell + an HTTP timeout once per port, which looked frozen
+rem for tens of seconds before the server was even started.
+for /f "usebackq delims=" %%P in (`powershell -NoProfile -NonInteractive -Command "$ports=@(); $path='%STATE_DIR%.anf3-port'; if(Test-Path -LiteralPath $path){$saved=(Get-Content -LiteralPath $path -TotalCount 1).Trim(); if($saved -match '^\d+$'){$ports+=[int]$saved}}; $ports+=8000..8039; foreach($port in ($ports|Select-Object -Unique)){ $client=New-Object Net.Sockets.TcpClient; try{$task=$client.ConnectAsync('127.0.0.1',[int]$port); if(-not $task.Wait(50) -or -not $client.Connected){continue}; try{$reply=Invoke-WebRequest -UseBasicParsing -TimeoutSec 1 ('http://127.0.0.1:'+$port+'/api/status'); if($reply.StatusCode -eq 200){Write-Output $port; break}}catch{}}finally{$client.Dispose()}}"`) do set "FOUND=%%P"
 exit /b 0
 
 rem A recorded port that is occupied but not ANF3 is a stop condition for a
@@ -285,9 +282,7 @@ rem ---------------------------------------------------------------------------
 :wait_for_server
 set "FOUND="
 for /l %%N in (1,1,30) do (
-  for /l %%P in (8000,1,8039) do (
-    if not defined FOUND call :probe %%P
-  )
+  call :find_server "%APP_DIR%"
   if defined FOUND goto :server_ready
   timeout /t 1 /nobreak >nul
 )

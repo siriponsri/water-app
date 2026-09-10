@@ -178,9 +178,9 @@
           <select id="buildingSelect">
             <option value="">All Buildings</option>
             <option value="10">Bldg 10</option>
-            <option value="11">Bldg 11</option>
             <option value="12">Bldg 12</option>
             <option value="16">Bldg 16</option>
+            <option value="OT">Other Locations</option>
           </select>
           <select id="statusFilter" style="min-width:130px;">
             <option value="Routine">Routine</option>
@@ -244,15 +244,10 @@
   <script>
     let allRecords = [];
 
-    const SHEET_NAMES_EM = { 'Routine': 'records_em' };
-
     async function loadFromGoogleSheet(status) {
-      const sheetName = SHEET_NAMES_EM[status] || 'records_em';
-      const url = `${SYNC_CONFIG.AIR_SCRIPT_URL}?action=getRecords&sheetName=${encodeURIComponent(sheetName)}`;
-      const resp = await fetch(url);
+      const resp = await fetch(`${SYNC_CONFIG.AIR_SCRIPT_URL}?action=search&workflow=em-air&limit=100`);
       const result = await resp.json();
-      if (result.success && result.data) return result.data;
-      return [];
+      return result.success && result.data && Array.isArray(result.data.items) ? result.data.items : [];
     }
 
     function statusInfo(syncStatus) {
@@ -346,7 +341,8 @@
         }
         if (dateFrom && r.samplingDate && r.samplingDate < dateFrom) return false;
         if (dateTo && r.samplingDate && r.samplingDate > dateTo) return false;
-        if (building && r.building !== building) return false;
+        if (building && building !== 'OT' && r.building !== building) return false;
+        if (building === 'OT' && ['10', '12', '16', 'B10', 'B12', 'B16', 'Building 10', 'Building 12', 'Building 16'].includes(String(r.building || ''))) return false;
         return true;
       });
 

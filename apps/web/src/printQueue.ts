@@ -6,6 +6,7 @@ export type PrintQueueItem = {
   recordKey: string;
   worksheetNo: string;
   scope: string;
+  returnTo?: string;
   cvMethod?: string;
 };
 
@@ -47,4 +48,9 @@ export function clearPrintQueue() {
 
 export function queueScope(items: PrintQueueItem[]) {
   return items[0]?.scope || '';
+}
+
+export function queueReturnTo(items: PrintQueueItem[]) {
+  const route = items[0]?.returnTo;
+  return route && route.startsWith('/list') ? route : '/list';
 }

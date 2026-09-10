@@ -203,6 +203,48 @@ def test_word_timeout_only_targets_recorded_winword_pid(tmp_path, monkeypatch):
     assert 'taskkill' not in cleanup.lower()
 
 
+def test_broken_word_is_disabled_and_libreoffice_handles_future_requests(tmp_path, monkeypatch):
+    word_path = tmp_path / 'input.docx'
+    pdf_path = tmp_path / 'output.pdf'
+    word_path.write_bytes(b'word')
+    calls = []
+
+    def broken_word(_word, _pdf):
+        calls.append('word')
+        return False, 'Cannot convert null to System.IntPtr'
+
+    def libreoffice(_word, output_dir):
+        calls.append('libreoffice')
+        (Path(output_dir) / 'input.pdf').write_bytes(b'%PDF')
+        return True, None
+
+    monkeypatch.setattr(pdf_server, 'MS_OFFICE_AVAILABLE', True)
+    monkeypatch.setattr(pdf_server, 'LIBREOFFICE_PATH', 'soffice')
+    monkeypatch.setattr(pdf_server, 'convert_with_word', broken_word)
+    monkeypatch.setattr(pdf_server, 'convert_with_libreoffice', libreoffice)
+
+    assert pdf_server._try_convert(str(word_path), str(pdf_path))[:2] == (True, 'LibreOffice')
+    assert calls == ['word', 'libreoffice']
+    assert pdf_server.MS_OFFICE_AVAILABLE is False
+    pdf_path.unlink()
+    assert pdf_server._try_convert(str(word_path), str(pdf_path))[:2] == (True, 'LibreOffice')
+    assert calls == ['word', 'libreoffice', 'libreoffice']
+
+
+def test_converter_selection_covers_libreoffice_only_and_none(tmp_path, monkeypatch):
+    word_path = tmp_path / 'input.docx'
+    pdf_path = tmp_path / 'output.pdf'
+    word_path.write_bytes(b'word')
+
+    monkeypatch.setattr(pdf_server, 'MS_OFFICE_AVAILABLE', False)
+    monkeypatch.setattr(pdf_server, 'LIBREOFFICE_PATH', 'soffice')
+    monkeypatch.setattr(pdf_server, 'convert_with_libreoffice', lambda _word, output_dir: ((Path(output_dir) / 'input.pdf').write_bytes(b'%PDF') or True, None))
+    assert pdf_server._try_convert(str(word_path), str(pdf_path))[:2] == (True, 'LibreOffice')
+
+    monkeypatch.setattr(pdf_server, 'LIBREOFFICE_PATH', None)
+    assert pdf_server._try_convert(str(word_path), str(pdf_path)) == (False, None, 'No PDF converter available')
+
+
 def test_placeholder_replacement_and_gate_cover_headers_and_footers(tmp_path):
     template = tmp_path / 'template.docx'
     output = tmp_path / 'output.docx'
@@ -243,3 +285,54 @@ def test_pdf_cache_is_incomplete_without_the_controlled_docx(client):
     assert regenerated.status_code == 201
     assert regenerated.get_json()['cached'] is False
     assert word_path.is_file()
+
+
+def test_controlled_replacement_requires_exact_confirmed_conflict_set(client):
+    initial = {
+        'workflow': 'cleaning-validation-contact',
+        'worksheetNo': 'CV-26-B10-0001',
+        'data': {'sampleMatrix': 'Contact Plate', 'analyst': 'A'}
+    }
+    first = client.post('/api/pdfs', json=initial)
+    assert first.status_code == 201
+
+    changed = {**initial, 'data': {'sampleMatrix': 'Contact Plate', 'analyst': 'B'}}
+    conflict = client.post('/api/pdfs', json=changed)
+    assert conflict.status_code == 409
+    body = conflict.get_json()
+    assert body['code'] == 'WORKSHEET_CONTENT_CONFLICT'
+    assert body['worksheetNo'] == 'CV-26-B10-0001'
+    assert body['workflow'] == 'cleaning-validation-contact'
+    assert body['existingPdfIds'] == [first.get_json()['pdfId']]
+
+    stale = client.post('/api/pdfs', json={**changed, 'regeneration': {
+        'mode': 'replace', 'requestedPdfId': body['requestedPdfId'], 'existingPdfIds': []
+    }})
+    assert stale.status_code == 409
+
+    replaced = client.post('/api/pdfs', json={**changed, 'regeneration': {
+        'mode': 'replace', 'requestedPdfId': body['requestedPdfId'],
+        'existingPdfIds': body['existingPdfIds']
+    }})
+    assert replaced.status_code == 201
+    assert client.get(f"/api/pdfs/{first.get_json()['pdfId']}").status_code == 404
+    metadata = client.get(f"/api/pdfs/{replaced.get_json()['pdfId']}").get_json()
+    assert metadata['pdfId'] == replaced.get_json()['pdfId']
+
+
+def test_failed_replacement_keeps_existing_artifacts_usable(client, monkeypatch):
+    payload = {'workflow': 'cleaning-validation-rinse-membrane', 'worksheetNo': 'CVR-26-B16-0001',
+               'cvContext': {'samplingFamily': 'Rinse', 'testMethod': 'Membrane Filtration'},
+               'data': {'sampleMatrix': 'Rinse', 'analyst': 'A'}}
+    first = client.post('/api/pdfs', json=payload)
+    assert first.status_code == 201
+    first_id = first.get_json()['pdfId']
+    monkeypatch.setattr(pdf_server, 'convert_to_pdf', lambda *_args: (False, None, 'broken converter'))
+    changed = {**payload, 'data': {'sampleMatrix': 'Rinse', 'analyst': 'B'}}
+    conflict = client.post('/api/pdfs', json=changed).get_json()
+    failed = client.post('/api/pdfs', json={**changed, 'regeneration': {
+        'mode': 'replace', 'requestedPdfId': conflict['requestedPdfId'],
+        'existingPdfIds': conflict['existingPdfIds']
+    }})
+    assert failed.status_code == 503
+    assert client.get(f"/api/pdfs/{first_id}").status_code == 200

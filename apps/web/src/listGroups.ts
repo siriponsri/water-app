@@ -65,5 +65,14 @@ export function groupListItems(workflow: Workflow, items: SearchItem[]): ListGro
   return [...groups.values()].map((group) => ({
     ...group,
     items: group.items.slice().sort((a, b) => String(b.samplingDate || '').localeCompare(String(a.samplingDate || '')) || String(a.worksheetNo || '').localeCompare(String(b.worksheetNo || '')))
-  })).sort((a, b) => a.buildingSegment.localeCompare(b.buildingSegment) || a.label.localeCompare(b.label));
+  })).sort((a, b) => {
+    const building = a.buildingSegment.localeCompare(b.buildingSegment);
+    if (building) return building;
+    /* Present the physical work sequence, not alphabetic English labels. */
+    const order = ['cv:contact', 'cv:rinse:pour', 'cv:rinse:membrane'];
+    const left = order.indexOf(a.key.split(':').slice(1).join(':'));
+    const right = order.indexOf(b.key.split(':').slice(1).join(':'));
+    if (left >= 0 || right >= 0) return (left < 0 ? order.length : left) - (right < 0 ? order.length : right);
+    return a.label.localeCompare(b.label);
+  });
 }

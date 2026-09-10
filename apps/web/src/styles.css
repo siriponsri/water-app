@@ -629,11 +629,22 @@ main { flex: 1; min-height: 0; }
 .list-group > header { display: flex; align-items: baseline; justify-content: space-between; gap: var(--space-sm); padding: var(--space-sm) 0; }
 .list-group h2 { margin: 0; font-size: var(--text-lg); }
 .list-group > header span { color: var(--color-muted); font-size: var(--text-xs); }
+.list-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-sm); padding: var(--space-sm) 0; border-bottom: 1px solid var(--color-rule); }
+.list-toolbar label { display: inline-flex; align-items: center; gap: var(--space-2xs); margin-right: auto; }
+.list-toolbar button { white-space: nowrap; }
+.list-row { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: stretch; border-bottom: 1px solid var(--color-rule); }
+.list-row > input { margin: 0 var(--space-sm); align-self: center; }
+.list-row > button { min-width: 0; border-bottom: 0; }
 .print-fill { margin-top: var(--space-md); border-top: 1px solid var(--color-rule); padding-top: var(--space-sm); }
 .print-fill summary { cursor: pointer; color: var(--color-muted); font-size: var(--text-sm); }
 .print-fill-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr)); gap: var(--space-xs); margin-top: var(--space-sm); }
 .print-fill-grid label { display: grid; gap: 3px; color: var(--color-muted); font-size: var(--text-xs); }
 .print-fill-grid input { min-height: 2rem; border: 1px solid var(--color-rule); background: var(--color-paper); color: var(--color-ink); padding: 0 var(--space-xs); font: inherit; }
+.print-fill-drawer { position: fixed; z-index: var(--z-modal); inset: var(--space-md) var(--space-md) var(--space-md) auto; width: min(34rem, calc(100vw - 2rem)); overflow: auto; padding: var(--space-lg); background: var(--color-paper-3); border: 1px solid var(--color-rule-2); box-shadow: var(--shadow-lift); }
+.print-fill-drawer > header { display: flex; align-items: center; justify-content: space-between; gap: var(--space-sm); border-bottom: 1px solid var(--color-rule); padding-bottom: var(--space-sm); }
+.print-fill-drawer h3 { margin: 0; font-family: var(--font-display); font-size: var(--text-lg); }
+.print-fill-drawer > p { color: var(--color-muted); font-size: var(--text-sm); }
+@media (max-width: 43rem) { .print-fill-drawer { inset: auto 0 0; width: 100%; max-height: min(80vh, 44rem); } }
 
 .work {
   display: grid;

@@ -10,7 +10,7 @@ import {
 import printJS from 'print-js';
 import { endpointConfigured, getSystemRecord, searchAllSystem, searchSystem } from './api';
 import type { RecordFilters } from './api';
-import { activeBinders, binderById, binderForContext, binderInstances, buildingGroups, calendarId, domains, shelfBinders, tools, workflowById, workflows } from './appData';
+import { activeBinders, binderById, binderForContext, binderInstances, buildingGroups, calendarId, domains, listRoute, shelfBinders, tools, workflowById, workflows } from './appData';
 import type { BinderInstance, BuildingGroupId, Tool, Workflow } from './appData';
 import { getCachedRecord, getCachedSearch, putCachedRecord, putCachedSearch } from './storage';
 import type { CachedRecord, SearchItem } from './storage';
@@ -36,8 +36,9 @@ import { filterRecordScope } from './recordScope';
 import { buildingChoices, readBuilding, setBuilding } from './buildingContext';
 import { groupListItems } from './listGroups';
 import type { ListGroup } from './listGroups';
-import { readPrintQueue, writePrintQueue } from './printQueue';
-import { blankPayloadKeys, mergePrintFill, readPrintFill, writePrintFill } from './printFill';
+import { queueReturnTo, readPrintQueue, writePrintQueue } from './printQueue';
+import { mergePrintFill, printableFields, readPrintFill, writePrintFill } from './printFill';
+import { editableRecordFields, editableSampleFields, resultValueValid, visibleRecordFields, visibleSampleFields } from './presentation';
 
 const DeskScene = lazy(() => import('./DeskScene'));
 const GamesHub = lazy(() => import('./games/GamesHub'));
@@ -105,9 +106,9 @@ type ShellContext = { online: boolean; theme: string; toggleTheme: () => void; o
 
 const RAIL_PRIMARY = [
   { to: '/', label: 'Shelf' },
-  { to: '/records/water', label: 'Water' },
-  { to: '/records/air', label: 'Air' },
-  { to: '/records/cv', label: 'Cleaning validation' },
+  { to: '/list?domain=water', label: 'Water' },
+  { to: '/list?domain=air', label: 'Air' },
+  { to: '/list?domain=cv', label: 'Cleaning validation' },
   { to: '/calendar', label: 'Calendar' }
 ];
 
@@ -175,7 +176,14 @@ function Shell() {
     return () => window.removeEventListener('anf3:building-context', sync);
   }, [contextDomain]);
   const changeBuilding = (value: string) => {
-    setBuilding(contextDomain, value);
+    /* The All records view spans domains, so its rail selector must scope
+       Water, Air and CV together rather than silently retaining Water's last
+       selection only. Domain workspaces still retain independent contexts. */
+    if (location.pathname === '/list') {
+      (['water', 'air', 'cv'] as const).forEach((domain) => setBuilding(domain, value));
+    } else {
+      setBuilding(contextDomain, value);
+    }
     const params = new URLSearchParams(location.search);
     if (value) params.set('building', value); else params.delete('building');
     navigate(`${location.pathname}${params.toString() ? `?${params}` : ''}`);
@@ -196,7 +204,7 @@ function Shell() {
     <nav className="rail" aria-label="Sections" ref={rail}>
       <Link className="rail-mark" to="/"><strong>ANF3</strong><span>Laboratory records</span></Link>
       <div className="rail-set">
-        {RAIL_PRIMARY.map((item) => <Link key={item.to} className="rail-link" to={item.to} aria-current={isCurrent(item.to) ? 'page' : undefined}>{item.label}</Link>)}
+        {RAIL_PRIMARY.map((item) => <Link key={item.to} className="rail-link" to={item.to.startsWith('/list?domain=') ? `${item.to}&building=${encodeURIComponent(selectedBuilding)}` : item.to} aria-current={isCurrent(item.to) ? 'page' : undefined}>{item.label}</Link>)}
         <Link className="rail-link" to="/list" aria-current={isCurrent('/list') ? 'page' : undefined}>All records</Link>
       </div>
       <div className="rail-set">
@@ -1390,10 +1398,29 @@ function RecordsPage() {
 function ListPage() {
   const online = useOnline();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const [groups, setGroups] = useState<ListGroup[]>([]);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
-  const [building, setBuildingFilter] = useState(() => readBuilding('water'));
+  const [errors, setErrors] = useState<Record<string, string>>({});
+  const [building, setBuildingFilter] = useState(() => searchParams.get('building') || readBuilding('water'));
+  const [query, setQuery] = useState(() => searchParams.get('q') || '');
+  const [from, setFrom] = useState(() => searchParams.get('from') || '');
+  const [to, setTo] = useState(() => searchParams.get('to') || '');
+  const workflowId = searchParams.get('workflow') || '';
+  const domainId = searchParams.get('domain') || '';
+  const selectedWorkflow = workflowId ? workflowById(workflowId) : undefined;
+  const scopeFilters: RecordFilters = {
+    building: building || undefined, q: query || undefined, from: from || undefined, to: to || undefined, gasType: searchParams.get('gasType') || undefined,
+    waterType: searchParams.get('waterType') || undefined, samplingFamily: searchParams.get('samplingFamily') || undefined,
+    testMethod: searchParams.get('testMethod') || undefined, samplingMode: searchParams.get('samplingMode') || undefined, limit: 100
+  };
+
+  useEffect(() => {
+    const requested = searchParams.get('building');
+    if (!requested) return;
+    (['water', 'air', 'cv'] as const).forEach((domain) => setBuilding(domain, requested));
+    setBuildingFilter(requested);
+  }, [searchParams]);
 
   useEffect(() => {
     const sync = () => setBuildingFilter(readBuilding('water'));
@@ -1403,43 +1430,67 @@ function ListPage() {
 
   useEffect(() => {
     const controller = new AbortController();
-    setLoading(true); setError('');
+    setLoading(true); setErrors({});
     if (!online) {
-      setGroups([]); setError('Connect to the System DB to load the complete record list.'); setLoading(false);
+      setGroups([]); setErrors({ system: 'Connect to the System DB to load the complete record list.' }); setLoading(false);
       return () => controller.abort();
     }
-    Promise.all(workflows.map(async (workflow) => {
+    const visibleWorkflows = selectedWorkflow ? [selectedWorkflow] : (domainId ? workflows.filter((workflow) => workflow.domain === domainId) : workflows);
+    Promise.all(visibleWorkflows.map(async (workflow) => {
       try {
-        const result = await searchAllSystem(workflow, { building: building || undefined, limit: 100 }, controller.signal);
-        return groupListItems(workflow, result.items);
+        const result = await searchAllSystem(workflow, scopeFilters, controller.signal);
+        return groupListItems(workflow, filterRecordScope(result.items, scopeFilters));
       } catch (reason) {
-        if (!controller.signal.aborted) setError(reason instanceof Error ? reason.message : 'System DB unavailable');
+        if (!controller.signal.aborted) setErrors((current) => ({ ...current, [workflow.id]: reason instanceof Error ? reason.message : 'System DB unavailable' }));
         return [];
       }
     })).then((result) => { if (!controller.signal.aborted) setGroups(result.flat()); })
       .finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
-  }, [online, building]);
+  }, [online, building, workflowId, domainId, searchParams, query, from, to]);
 
   const open = (group: ListGroup, item: SearchItem) => {
     const params = new URLSearchParams();
-    if (item.building) params.set('building', item.building);
+    if (building) params.set('building', building);
+    ['gasType', 'waterType', 'samplingFamily', 'testMethod', 'samplingMode'].forEach((key) => {
+      const value = searchParams.get(key);
+      if (value) params.set(key, value);
+    });
     if (group.workflowId === 'cv') {
       params.set('samplingFamily', group.cvMethod === 'contact-plate' ? 'contact-plate' : 'rinse');
       if (group.cvMethod && group.cvMethod !== 'contact-plate') params.set('testMethod', group.cvMethod);
     }
     navigate(`/records/${workflows.find((entry) => entry.id === group.workflowId)?.domain || 'water'}/${group.workflowId}/${encodeURIComponent(item.recordKey)}?${params}`);
   };
+  const [picked, setPicked] = useState<Map<string, { group: ListGroup; item: SearchItem }>>(new Map());
+  const allRows = groups.flatMap((group) => group.items.map((item) => ({ group, item })));
+  useEffect(() => { setPicked(new Map()); }, [building, workflowId, domainId, query, from, to]);
+  const compatibleWithSelection = (group: ListGroup) => !picked.size || [...picked.values()].every((pickedItem) => pickedItem.group.workflowId === group.workflowId && pickedItem.group.cvMethod === group.cvMethod);
+  const toggle = (group: ListGroup, item: SearchItem) => setPicked((current) => { const next = new Map(current); const key = `${group.workflowId}:${item.recordKey}`; if (next.has(key)) next.delete(key); else if (compatibleWithSelection(group)) next.set(key, { group, item }); return next; });
+  const clear = () => setPicked(new Map());
+  const selectAll = () => {
+    const compatible = picked.size ? allRows.filter(({ group }) => compatibleWithSelection(group)) : allRows.slice(0, 1).flatMap(({ group }) => allRows.filter((row) => row.group.workflowId === group.workflowId && row.group.cvMethod === group.cvMethod));
+    setPicked(new Map(compatible.map(({ group, item }) => [`${group.workflowId}:${item.recordKey}`, { group, item }])));
+  };
+  const printSelected = () => {
+    const chosen = [...picked.values()]; const ids = new Set(chosen.map(({ group }) => group.workflowId));
+    if (ids.size !== 1) return;
+    const workflow = workflowById(chosen[0].group.workflowId)!;
+    writePrintQueue(chosen.map(({ group, item }) => ({ domain: workflow.domain, workflow: group.workflowId, recordKey: item.recordKey, worksheetNo: item.worksheetNo || item.recordId || item.recordKey, scope: building || 'all', returnTo: `/list?${searchParams.toString()}`, cvMethod: group.cvMethod })));
+    navigate(`/print/${workflow.domain}/${workflow.id}`);
+  };
 
   return <div className="page wide">
-    <header className="masthead"><h1>All records</h1><p>Every worksheet grouped by building and work. Select a row to open the read-only workspace.</p></header>
-    {error && <p className="note"><Info size={14} />{error}</p>}
+    <header className="masthead"><h1>{domainId ? `${domainId === 'cv' ? 'Cleaning Validation' : domainId[0].toUpperCase() + domainId.slice(1)} records` : 'All records'}</h1><p>{building ? `${building} · ` : ''}Every worksheet grouped by building and work. Open a row or select worksheets to print.</p></header>
+    <div className="list-filters"><label><Search size={15} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search worksheet, product or sampling point" aria-label="Search records" /></label><label>From<input type="date" value={from} onChange={(event) => setFrom(event.target.value)} /></label><label>To<input type="date" value={to} onChange={(event) => setTo(event.target.value)} /></label></div>
+    {Object.entries(errors).map(([key, message]) => <p className="note" key={key}><Info size={14} />{key === 'system' ? message : `${workflowById(key)?.shortName || key}: ${message}`}</p>)}
     {loading ? <p className="state is-loading"><RefreshCw size={18} />Loading records...</p> : groups.length === 0 ? <div className="state"><Search size={20} /><h2>No records</h2><p>There are no records for the selected building.</p></div> : <div className="list-groups">
+      <div className="list-toolbar"><label><input type="checkbox" checked={allRows.length > 0 && picked.size === allRows.length} onChange={() => picked.size === allRows.length ? clear() : selectAll()} /> Select compatible</label><span>{picked.size} selected</span>{picked.size > 0 && <><button type="button" onClick={clear}>Clear</button><button type="button" className="primary" onClick={printSelected}><Printer size={14} />Print selected</button></>}</div>
       {groups.map((group) => <section className="list-group" key={group.key}>
         <header><h2>{group.building}</h2><span>{group.label} · {group.items.length}</span></header>
-        <div className="run">{group.items.map((item) => <button type="button" key={item.recordKey} onClick={() => open(group, item)}>
-          <span><strong>{item.worksheetNo || item.recordId || item.recordKey}</strong><small>{item.samplingDate || 'No sampling date'}{item.performedDate ? ` · performed ${item.performedDate}` : ''}{item.samplingPoints ? ` · ${item.samplingPoints}` : ''}</small></span><ChevronRight size={14} />
-        </button>)}</div>
+        <div className="run">{group.items.map((item) => <div className="list-row" key={item.recordKey}><input type="checkbox" disabled={!compatibleWithSelection(group)} checked={picked.has(`${group.workflowId}:${item.recordKey}`)} onChange={() => toggle(group, item)} aria-label={`Select ${item.worksheetNo || item.recordKey}`} title={!compatibleWithSelection(group) ? 'Select worksheets from one compatible work at a time' : undefined} /><button type="button" onClick={() => open(group, item)}>
+          <span><strong>{item.worksheetNo || item.recordId || item.recordKey}</strong><small>{item.building || group.building} · {item.samplingDate || 'No sampling date'}{item.performedDate ? ` · performed ${item.performedDate}` : ''}{item.samplingPoints ? ` · ${item.samplingPoints}` : ''}{item.sampleCount ? ` · ${item.sampleCount} samples` : ''}{group.cvMethod ? ` · ${group.label}` : ''}</small></span><ChevronRight size={14} />
+        </button></div>)}</div>
       </section>)}
     </div>}
   </div>;
@@ -1447,6 +1498,7 @@ function ListPage() {
 
 function PrintPage() {
   const { domain = '', workflow: workflowId = '' } = useParams();
+  const navigate = useNavigate();
   const workflow = workflowById(workflowId);
   const [queue, setQueue] = useState(readPrintQueue);
   useEffect(() => {
@@ -1457,8 +1509,9 @@ function PrintPage() {
   if (!workflow || workflow.domain !== domain) return <Navigate to="/list" replace />;
   const items = queue.filter((item) => item.domain === domain && item.workflow === workflowId)
     .map((item) => ({ recordKey: item.recordKey, worksheetNo: item.worksheetNo }));
-  if (!items.length) return <div className="page"><div className="state"><Printer size={20} /><h2>Print queue is empty</h2><Link className="text-link" to={`/records/${domain}/${workflowId}`}>Back to records</Link></div></div>;
-  return <BatchPreview workflow={workflow} items={items} presetMethod={queue.find((item) => item.domain === domain && item.workflow === workflowId)?.cvMethod} onClose={() => window.history.back()} />;
+  const returnTo = queueReturnTo(queue.filter((item) => item.domain === domain && item.workflow === workflowId));
+  if (!items.length) return <div className="page"><div className="state"><Printer size={20} /><h2>Print queue is empty</h2><Link className="text-link" to={returnTo}>Back to records</Link></div></div>;
+  return <BatchPreview workflow={workflow} items={items} presetMethod={queue.find((item) => item.domain === domain && item.workflow === workflowId)?.cvMethod} onClose={() => navigate(returnTo)} />;
 }
 
 function Workspace({ workflow, initialRecordKey, initialFilters = {}, presetMethod }: { workflow: Workflow; initialRecordKey?: string; initialFilters?: RecordFilters; presetMethod?: string }) {
@@ -1572,12 +1625,18 @@ function Workspace({ workflow, initialRecordKey, initialFilters = {}, presetMeth
           </label>
           {picked.size > 0 && <>
             <button type="button" className="primary" onClick={() => {
+              const returnTo = listRoute(initialFilters.building, workflow.id, {
+                gasType: initialFilters.gasType || '', waterType: initialFilters.waterType || '',
+                samplingFamily: initialFilters.samplingFamily || '', testMethod: initialFilters.testMethod || '',
+                samplingMode: initialFilters.samplingMode || ''
+              });
               writePrintQueue(scopedItems.filter((item) => picked.has(item.recordKey)).map((item) => ({
                 domain: workflow.domain,
                 workflow: workflow.id,
                 recordKey: item.recordKey,
                 worksheetNo: item.worksheetNo || item.recordId || item.recordKey,
                 scope: initialFilters.building || 'all',
+                returnTo: returnTo,
                 cvMethod: workflow.id === 'cv' ? normalizeCvTestMethod(item.testMethod || presetMethod) : undefined
               })));
               navigate(`/print/${workflow.domain}/${workflow.id}`);
@@ -1630,7 +1689,7 @@ function Workspace({ workflow, initialRecordKey, initialFilters = {}, presetMeth
 }
 
 function RecordSheet({ workflow, value, fresh, online, presetMethod }: { workflow: Workflow; value: CachedRecord; fresh: boolean; online: boolean; presetMethod?: string }) {
-  const fields = Object.entries(value.record).filter(([, field]) => field !== '' && field !== null && field !== undefined).slice(0, 36);
+  const fields = visibleRecordFields(value.record);
   const availability = pdfAvailability(workflow, value.record, fresh, online, presetMethod);
   const family = workflow.id === 'cv' ? cvSamplingFamily(value.record) : null;
   const current = fresh && online;
@@ -1670,7 +1729,7 @@ function RecordSheet({ workflow, value, fresh, online, presetMethod }: { workflo
       </span>
       <span>
         <span className="label">Fields returned</span>
-        <span className="readout">{fields.length}<small>of {Object.keys(value.record).length}</small></span>
+        <span className="readout">{fields.length}<small>shown</small></span>
       </span>
       <span>
         <span className="label">Source</span>
@@ -1678,16 +1737,16 @@ function RecordSheet({ workflow, value, fresh, online, presetMethod }: { workflo
       </span>
     </div>
     <Actions workflow={workflow} value={value} availability={availability} presetMethod={presetMethod} />
-    <p className="legend">Record fields</p>
-    <div className="fields">{fields.map(([key, field]) => <div key={key}>
-      <span className="key">{key}</span><span className="value">{display(field)}</span>
+    <p className="legend">Record details</p>
+    <div className="fields">{fields.map((field) => <div key={field.key}>
+      <span className="key">{field.label}</span><span className="value">{display(value.record[field.key])}</span>
     </div>)}</div>
     <section className="samples">
       <h3 className="legend">Samples <span>{value.samples.length}</span></h3>
       {value.samples.slice(0, 100).map((sample, index) => <div className="sample" key={index}>
         <span>{String(index + 1).padStart(2, '0')}</span>
-        <strong>{String(sample.samplingPoint || sample.room || sample.location || 'Sample')}</strong>
-        <small>{String(sample.resultDisplay || sample.resultValue || sample.occResult || '')}</small>
+        <strong>{visibleSampleFields(sample).find((field) => field.label === 'Sampling point' || field.label === 'Room / point') ? String(sample.samplingPoint || sample.roomNo || sample.room || sample.location || 'Sample') : 'Sample'}</strong>
+        <small>{visibleSampleFields(sample).filter((field) => field.section === 'Results').map((field) => `${field.label}: ${String(sample[field.key])}`).join(' · ')}</small>
       </div>)}
     </section>
   </div>;
@@ -1723,11 +1782,13 @@ function Actions({ workflow, value, availability, presetMethod }: { workflow: Wo
   const basePayload = route
     ? documentPayload(route, value.record, value.samples, String(value.record.worksheetNo || value.record.docNo || value.recordKey), method)
     : {};
-  const fillableKeys = blankPayloadKeys(basePayload);
+  const [editorOpen, setEditorOpen] = useState(false);
+  const printable = printableFields(basePayload);
   const updateFill = (key: string, next: string) => {
     const values = { ...fillValues, [key]: next };
     setFillValues(values);
     writePrintFill(workflow.domain, workflow.id, value.recordKey, values);
+    setPdfId('');
   };
 
   const generate = async () => {
@@ -1744,6 +1805,23 @@ function Actions({ workflow, value, availability, presetMethod }: { workflow: Wo
         })
       });
       const result = await response.json();
+      if (response.status === 409 && result.code === 'WORKSHEET_CONTENT_CONFLICT') {
+        const approved = window.confirm(`This worksheet has a different generated document. Replace it with this reviewed draft?`);
+        if (!approved) return;
+        const replacement = await fetch('/api/pdfs', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            workflow: route, worksheetNo: String(value.record.worksheetNo || value.record.docNo || value.recordKey),
+            cvContext: workflow.id === 'cv' ? { samplingFamily: cvSamplingFamily(value.record), testMethod: method } : undefined,
+            data: mergePrintFill(basePayload, fillValues),
+            regeneration: { mode: 'replace', requestedPdfId: result.requestedPdfId, existingPdfIds: result.existingPdfIds }
+          })
+        });
+        const replacementResult = await replacement.json();
+        if (!replacement.ok) throw new Error(replacementResult.error || 'Document replacement failed');
+        setPdfId(replacementResult.pdfId);
+        return;
+      }
       if (!response.ok) throw new Error(result.error || 'PDF generation failed');
       setPdfId(result.pdfId);
       logEvent('pdf_generated', { worksheetNo: worksheet, detail: route || workflow.id });
@@ -1811,20 +1889,22 @@ function Actions({ workflow, value, availability, presetMethod }: { workflow: Wo
     <div className="actions">
       {/* Once a preview exists on a narrow screen, opening it is the thing the
           reader wants next — not regenerating it. */}
-      <button className={ready && !wide ? '' : 'primary'} type="button" disabled={!canGenerate || busy} onClick={generate}>
-        <BookOpen size={15} />{busy ? 'Preparing…' : pdfId ? 'Refresh' : 'Preview PDF'}
+      <button className={ready && !wide ? '' : 'primary'} type="button" disabled={!canGenerate || busy} onClick={() => setEditorOpen(true)}>
+        <BookOpen size={15} />Fill in / Edit before print
       </button>
       {ready && <button className={wide ? '' : 'primary'} type="button" onClick={() => setViewer(true)}>
         <Maximize2 size={15} />{wide ? 'Full screen' : 'Open preview'}
       </button>}
       {fileActions}
     </div>
-    {fillableKeys.length > 0 && <details className="print-fill">
-      <summary>Optional blank fields for this print (saved on this machine only)</summary>
+    {editorOpen && <section className="print-fill-drawer" role="dialog" aria-modal="true" aria-label="Fill in or edit before print">
+      <header><h3>Fill in / Edit before print</h3><button type="button" onClick={() => setEditorOpen(false)}><X size={15} />Close</button></header>
+      <p>Draft changes are saved only on this computer. Worksheet identity, route and sample order stay locked.</p>
       <div className="print-fill-grid">
-        {fillableKeys.map((key) => <label key={key}><span>{key}</span><input value={fillValues[key] || ''} onChange={(event) => updateFill(key, event.target.value)} /></label>)}
+        {printable.map((field) => <label key={field.key}><span>{field.label}</span><input value={fillValues[field.key] ?? basePayload[field.key] ?? ''} onChange={(event) => updateFill(field.key, event.target.value)} /></label>)}
       </div>
-    </details>}
+      <div className="actions"><button type="button" onClick={() => { setFillValues({}); writePrintFill(workflow.domain, workflow.id, value.recordKey, {}); setPdfId(''); }}>Reset to System DB</button><button className="primary" type="button" disabled={busy} onClick={() => { setEditorOpen(false); void generate(); }}><BookOpen size={15} />Generate preview</button></div>
+    </section>}
     {rinse && <fieldset className="method">
       <legend>Rinse test method</legend>
       <label><input type="radio" name={`${CV_METHOD_CONTROL_ID}-${value.recordKey}`} value="pour-plate" checked={method === 'pour-plate'} onChange={() => { setMethod('pour-plate'); setPdfId(''); }} />Pour Plate <small>renders on the approved PW/PRW template family</small></label>

@@ -139,17 +139,22 @@ MS_OFFICE_AVAILABLE = False
 LIBREOFFICE_PATH = None
 
 def find_msoffice():
-    """ตรวจหา Microsoft Word (ไม่เปิด instance จริง — ตรวจจาก registry)"""
+    """Return true only when Word COM can actually start and quit."""
+    if os.name != 'nt':
+        return False
+    probe = (
+        "$ErrorActionPreference = 'Stop'; "
+        "$word = New-Object -ComObject Word.Application; "
+        "try { $word.Visible = $false } finally { $word.Quit(); "
+        "[Runtime.InteropServices.Marshal]::ReleaseComObject($word) | Out-Null }"
+    )
     try:
-        import winreg
-        winreg.OpenKey(winreg.HKEY_CLASSES_ROOT, 'Word.Application')
-        return True
-    except Exception:
-        pass
-    try:
-        import win32com.client  # noqa
-        return True
-    except ImportError:
+        result = subprocess.run(
+            ['powershell', '-ExecutionPolicy', 'Bypass', '-NonInteractive', '-NoProfile', '-Command', probe],
+            capture_output=True, text=True, timeout=15
+        )  # nosec - constant local capability probe
+        return result.returncode == 0
+    except (OSError, subprocess.SubprocessError):
         return False
 
 def find_libreoffice():
@@ -212,8 +217,10 @@ $word.Visible = $false
 $word.DisplayAlerts = 0
 try {{
     $wordProcessId = 0
-    [Win32Pid]::GetWindowThreadProcessId([IntPtr]$word.Hwnd, [ref]$wordProcessId) | Out-Null
-    [IO.File]::WriteAllText("{pid_file}", [string]$wordProcessId)
+    if ($null -ne $word.Hwnd -and [IntPtr]$word.Hwnd -ne [IntPtr]::Zero) {{
+        [Win32Pid]::GetWindowThreadProcessId([IntPtr]$word.Hwnd, [ref]$wordProcessId) | Out-Null
+        if ($wordProcessId -gt 0) {{ [IO.File]::WriteAllText("{pid_file}", [string]$wordProcessId) }}
+    }}
     $doc = $word.Documents.Open("{word_path}", $false, $true, $false)
     $doc.SaveAs([ref]"{pdf_path}", [ref]17)
     $doc.Close([ref]$false)
@@ -335,12 +342,16 @@ def _convert_to_pdf_locked(word_path, pdf_path):
 
 def _try_convert(word_path, pdf_path):
     """Internal helper: single conversion attempt using available converters."""
+    global MS_OFFICE_AVAILABLE
     # Try MS Office first
     if MS_OFFICE_AVAILABLE:
         success, error = convert_with_word(word_path, pdf_path)
         if success:
             return True, 'MS Office', None
         print(f"[WARNING] MS Office conversion failed: {error}")
+        # A successful capability probe should make this rare, but a broken COM
+        # path must not delay every subsequent document before LibreOffice runs.
+        MS_OFFICE_AVAILABLE = False
 
     # Try LibreOffice
     if LIBREOFFICE_PATH:
@@ -911,11 +922,12 @@ def _unresolved_placeholders(path):
     return sorted(set(placeholders))
 
 
-def _worksheet_artifact_conflict(workflow, worksheet_no, pdf_id):
-    """Find an existing worksheet artifact generated from different content."""
+def _worksheet_artifact_conflicts(workflow, worksheet_no, pdf_id):
+    """Return ready artifact ids for this worksheet with different content."""
     folder = os.path.join(PDFS_DIR, workflow)
     if not os.path.isdir(folder):
-        return False
+        return []
+    conflicts = []
     for name in os.listdir(folder):
         if not name.endswith('.json'):
             continue
@@ -927,8 +939,8 @@ def _worksheet_artifact_conflict(workflow, worksheet_no, pdf_id):
         if (metadata.get('status') == 'ready' and
                 metadata.get('filename') == f'{worksheet_no}.pdf' and
                 metadata.get('pdfId') != pdf_id):
-            return True
-    return False
+            conflicts.append(metadata.get('pdfId'))
+    return sorted(conflicts)
 
 
 def _pdf_paths(workflow, pdf_id):
@@ -1087,13 +1099,32 @@ def create_pdf():
     # The PDF id remains internal cache identity; the user-facing file identity
     # is always the worksheet number.
     word_path = os.path.join(word_folder, f'{worksheet_no}.docx')
+    regeneration = payload.get('regeneration') or {}
+    replace_requested = regeneration.get('mode') == 'replace'
+    requested_pdf_id = str(regeneration.get('requestedPdfId') or '')
+    supplied_existing_ids = regeneration.get('existingPdfIds')
 
     # The worksheet identity is user-facing and must never be silently
     # overwritten by two concurrent requests. Serialize the identity check,
     # DOCX write, conversion and metadata commit as one local transaction.
     with DOCUMENT_GENERATION_LOCK:
-        if _worksheet_artifact_conflict(workflow, worksheet_no, pdf_id):
-            return _json_error('Worksheet already has a generated document with different content; controlled regeneration is required', 409)
+        existing_ids = _worksheet_artifact_conflicts(workflow, worksheet_no, pdf_id)
+        if existing_ids:
+            valid_replace = (
+                replace_requested and
+                requested_pdf_id == pdf_id and
+                isinstance(supplied_existing_ids, list) and
+                sorted(str(value) for value in supplied_existing_ids) == existing_ids
+            )
+            if not valid_replace:
+                return jsonify({
+                    'error': 'Worksheet already has a generated document with different content; review and confirm replacement',
+                    'code': 'WORKSHEET_CONTENT_CONFLICT',
+                    'worksheetNo': worksheet_no,
+                    'workflow': workflow,
+                    'requestedPdfId': pdf_id,
+                    'existingPdfIds': existing_ids
+                }), 409
 
         # A metadata/PDF cache entry without its worksheet DOCX is incomplete;
         # regenerate the pair instead of reporting a false cache hit.
@@ -1101,21 +1132,21 @@ def create_pdf():
                 os.path.isfile(word_path)):
             return jsonify({'pdfId': pdf_id, 'status': 'ready', 'cached': True})
 
+        temporary_dir = tempfile.mkdtemp(prefix='anf3-pdf-', dir=os.path.dirname(pdf_path))
+        temporary_word = os.path.join(temporary_dir, f'{worksheet_no}.docx')
+        temporary_pdf = os.path.join(temporary_dir, f'{pdf_id}.pdf')
+        temporary_metadata = os.path.join(temporary_dir, f'{pdf_id}.json')
         try:
             if pages:
                 sanitized_pages = [sanitize_data_for_xml(page) for page in pages]
-                build_multipage_docx(template_path, word_path, sanitized_pages)
+                build_multipage_docx(template_path, temporary_word, sanitized_pages)
             else:
-                replace_placeholders_in_file(template_path, word_path, document_data)
-            unresolved = _unresolved_placeholders(word_path)
+                replace_placeholders_in_file(template_path, temporary_word, document_data)
+            unresolved = _unresolved_placeholders(temporary_word)
             if unresolved:
-                try:
-                    os.remove(word_path)
-                except OSError:
-                    pass
                 return _json_error('Generated DOCX contains unresolved placeholders', 500)
-            success, converter, error = convert_to_pdf(word_path, pdf_path)
-            if not success or not os.path.isfile(pdf_path):
+            success, converter, error = convert_to_pdf(temporary_word, temporary_pdf)
+            if not success or not os.path.isfile(temporary_pdf):
                 print(f'[ERROR] PDF conversion failed: {error or "unknown error"}')
                 return _json_error('PDF conversion failed', 503)
             metadata = {
@@ -1127,16 +1158,31 @@ def create_pdf():
                 'templateOwner': PDF_WORKFLOW_REGISTRY[workflow]['owner'],
                 'templateFamily': PDF_WORKFLOW_REGISTRY[workflow]['family'],
                 'sourceWorkflow': PDF_WORKFLOW_REGISTRY[workflow].get('sourceWorkflow'),
-                'converter': converter
+                'converter': converter,
+                'regeneratedAt': datetime.now().astimezone().isoformat() if existing_ids else None,
+                'supersededPdfIds': existing_ids if existing_ids else []
             }
-            temp_metadata = metadata_path + '.tmp'
-            with open(temp_metadata, 'w', encoding='utf-8') as target:
+            with open(temporary_metadata, 'w', encoding='utf-8') as target:
                 json.dump(metadata, target, ensure_ascii=False, sort_keys=True)
-            os.replace(temp_metadata, metadata_path)
+            # Do not disturb the controlled pair until DOCX, PDF and sidecar
+            # are all complete. A failed conversion therefore leaves the old
+            # worksheet available exactly as it was.
+            os.replace(temporary_word, word_path)
+            os.replace(temporary_pdf, pdf_path)
+            os.replace(temporary_metadata, metadata_path)
+            for old_pdf_id in existing_ids:
+                old_pdf_path, old_metadata_path = _pdf_paths(workflow, old_pdf_id)
+                for path in (old_pdf_path, old_metadata_path):
+                    try:
+                        os.remove(path)
+                    except OSError:
+                        pass
             return jsonify({'pdfId': pdf_id, 'status': 'ready', 'cached': False}), 201
         except (OSError, ValueError, zipfile.BadZipFile) as error:
             print(f'[ERROR] PDF generation failed: {error}')
             return _json_error('PDF generation failed', 500)
+        finally:
+            shutil.rmtree(temporary_dir, ignore_errors=True)
 
 
 @app.route('/api/pdfs/<pdf_id>', methods=['GET'])

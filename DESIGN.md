@@ -54,10 +54,10 @@ Recommended default:
 - One shelf/group per confirmed building/location, with pagination or scrolling when the visual capacity is exceeded.
 - Binders on a shelf are workflows available for that building.
 - Do not show an empty fake binder for an unavailable workflow.
-- `Other Locations` uses orange and currently exposes Building 11 Air Sampling, Building 11 CA, and Building 19 PRW as distinct destinations.
+- `Other Locations` uses orange and is split into Other-Water, Other-Air, Other-CA, and Other-CV binders. The displayed record retains exact Building 11, Building 19, or unknown source text where supplied.
 - Pink is a disabled reserve representation labeled `Coming Soon`; it has no count, record API, or route.
 
-The full source of truth is `docs/CABINET_WORKFLOW_MATRIX.md`: 4 destinations for B10, 4 for B12, 5 for B16, and 3 for Other Locations = 16 active destinations. Never infer a new binder from a color, workbook tab, or unsupported combination.
+The full source of truth is `docs/CABINET_WORKFLOW_MATRIX.md`: 4 destinations for B10, 4 for B12, 5 for B16, and 4 for Other Locations = 17 active destinations. Never infer a new binder from a color, workbook tab, or unsupported combination.
 
 The architecture must support configuration-driven shelf/binder data rather than hardcoded scene geometry for each workflow.
 

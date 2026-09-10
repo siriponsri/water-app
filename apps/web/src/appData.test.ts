@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { activeBinders, binderById, binderInstances, buildingGroups, fellerCorrected, otherLocationSections, shelfBinders, tools, workflowById } from './appData';
+import { activeBinders, binderById, binderInstances, buildingGroups, fellerCorrected, listRoute, shelfBinders, tools, workflowById } from './appData';
 import { catalogIndexUsable, cvSamplingFamily, normalizeCvTestMethod, pdfAvailability, pdfRouteForRecord } from './recordPolicy';
 import { READ_CACHE_DB_NAME } from './storage';
 
@@ -14,17 +14,15 @@ describe('laboratory workflow policies', () => {
     expect(READ_CACHE_DB_NAME).toBe('anf3-read-cache-v1');
   });
 
-  /* The shelf topology the owner specified: four blue binders for Building 10,
-     four lilac for Building 12, five mint for Building 16, ONE orange binder
-     holding Building 11 and Building 19 together, and one pink spare that is
-     on the shelf, labelled Coming Soon, with nothing behind it. */
+  /* Other preserves the orange physical family but is split by domain so a
+     reader never enters an ambiguous mixed-work binder. */
   it('derives the shelf from the typed matrix registry', () => {
-    expect(binderInstances).toHaveLength(15);
-    expect(new Set(binderInstances.map((binder) => binder.id)).size).toBe(15);
+    expect(binderInstances).toHaveLength(18);
+    expect(new Set(binderInstances.map((binder) => binder.id)).size).toBe(18);
     expect(activeBinders('B10')).toHaveLength(4);
     expect(activeBinders('B12')).toHaveLength(4);
     expect(activeBinders('B16')).toHaveLength(5);
-    expect(activeBinders('OTHER')).toHaveLength(1);
+    expect(activeBinders('OTHER')).toHaveLength(4);
     expect(binderInstances.filter((binder) => binder.state === 'active').every((binder) => binder.route)).toBe(true);
   });
 
@@ -38,15 +36,25 @@ describe('laboratory workflow policies', () => {
     expect(shelfBinders('RESERVE')).toHaveLength(1);
   });
 
-  it('puts Building 11 and Building 19 inside the one orange binder', () => {
-    const other = binderById('other-locations');
-    expect(other?.route).toBe('/binder/other-locations');
-    expect(other?.sections).toHaveLength(3);
-    expect(otherLocationSections.map((section) => section.id))
-      .toEqual(['b11-em-air', 'b11-ca', 'b19-prw']);
-    expect(otherLocationSections.find((section) => section.id === 'b19-prw')?.route)
-      .toContain('building=Building%2019');
-    expect(otherLocationSections.filter((section) => section.route.includes('Building%2011'))).toHaveLength(2);
+  it('splits Other into Water, Air, CA and CV binders without exposing storage shards', () => {
+    expect(activeBinders('OTHER').map((binder) => binder.id))
+      .toEqual(['other-water', 'other-air', 'other-ca', 'other-cv']);
+    expect(binderById('other-water')?.route).toContain('building=Other');
+    expect(binderById('other-water')?.route).toContain('workflow=pw-prw');
+    expect(binderById('other-air')?.route).toContain('workflow=em-air');
+    expect(binderById('other-ca')?.route).toContain('workflow=compressed-air');
+    expect(binderById('other-cv')?.route).toContain('workflow=cv');
+  });
+
+  it('preserves binder work and secondary scope in list routes', () => {
+    expect(binderById('b10-em-air')?.route).toBe('/list?building=Building+10&workflow=em-air&samplingMode=passive%2Cactive');
+    expect(binderById('b10-ca')?.route).toBe('/list?building=Building+10&workflow=compressed-air&gasType=CA');
+    expect(listRoute('Other', 'pw-prw', { waterType: 'all' })).toBe('/list?building=Other&workflow=pw-prw&waterType=all');
+  });
+
+  it('keeps the unified list as the building-scoped entry point for each domain', () => {
+    expect(binderById('b10-em-air')?.route).toContain('building=Building+10');
+    expect(binderById('b10-em-air')?.route).toContain('workflow=em-air');
   });
 
   it('names the five required tool tabs and marks the one behind the lab network', () => {

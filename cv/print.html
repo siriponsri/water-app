@@ -32,6 +32,7 @@
             <label><input type="radio" name="cv-print-method" value="membrane-filtration" onchange="onCvPrintMethodChange(this.value)"><span><strong>Membrane Filtration</strong><small>Uses the WFI / PUS template family</small></span></label>
           </fieldset>
           <div id="cvPrintGuardrail" class="cv-notice cv-notice--salmon" hidden><strong>Document route is unavailable.</strong> Check the CV matrix and test method before generating a PDF.</div>
+          <fieldset class="cv-panel" style="margin:12px 0;padding:12px"><legend>Optional print fields</legend><div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px"><label class="cv-field">Comment<input id="cvOverrideComment" type="text"></label><label class="cv-field">Inc No<input id="cvOverrideIncNo" type="text"></label><label class="cv-field">Temperature<input id="cvOverrideTemp" type="number" step="1"></label></div><small>Optional values apply to this print only; blank fields remain blank.</small></fieldset>
           <div class="pdf-viewer cv-panel"><div class="pdf-viewer__header"><span class="pdf-viewer__title">Data preview</span><span id="pdfViewerStatus"></span></div><div id="pdfViewerContent" class="pdf-viewer__content"><div class="cv-empty-state"><strong>Select a CV record</strong><p>รายการในเครื่องจะแสดงทางซ้าย</p></div></div></div>
         </section>
       </div>

@@ -27,14 +27,14 @@
     "cvTemplates": "cv-owned-files-registry-versions-and-hashes-separate-from-water"
   },
   "auditedCapacity": {
-    "activeDestinations": 14,
+    "activeDestinations": 17,
     "b10": 4,
     "b12": 4,
     "b16": 5,
-    "otherLocations": 3,
+    "otherLocations": 4,
     "reserve": 1,
-    "shelfBinders": 15,
-    "note": "Building 11 and Building 19 share the single orange Other Locations binder; one pink reserve binder stands on the shelf and is never openable."
+    "shelfBinders": 18,
+    "note": "Other keeps the orange asset family but is split into Water, Air, CA, and CV binders; source building text such as Building 11 and Building 19 remains visible in records. One pink reserve binder stands on the shelf and is never openable."
   },
   "assets": [
     {

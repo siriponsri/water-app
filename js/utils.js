@@ -50,6 +50,12 @@ function formatResultValue(value) {
   return String(rounded);
 }
 
+function formatMeasurementValue(value) {
+  if (value === '' || value === null || value === undefined) return '';
+  const num = parseFloat(value);
+  return isNaN(num) ? String(value) : String(Math.round(num));
+}
+
 /**
  * Preserve leading zeros by adding single quote prefix
  * For Google Sheets to treat as text instead of number
@@ -97,9 +103,6 @@ function formatDateDMY(dateValue) {
   try {
     let day, month, year;
     
-    // Debug log
-    console.log('[formatDateDMY] Input:', dateValue, 'Type:', typeof dateValue);
-    
     // Handle Date object
     if (dateValue instanceof Date) {
       day = dateValue.getDate();
@@ -119,13 +122,13 @@ function formatDateDMY(dateValue) {
         month = parseInt(parts[1], 10) - 1;
         year = parseInt(parts[2], 10);
       }
-      // ISO format with T (2025-11-20T00:00:00 or 2026-01-23T17:00:00.000Z)
-      // Must use Date object to convert UTC to local timezone
-      else if (dateValue.includes('T')) {
-        const parsed = new Date(dateValue);
-        day = parsed.getDate();
-        month = parsed.getMonth();
-        year = parsed.getFullYear();
+      // An ISO timestamp is a date-only document field. Keep its source
+      // calendar day instead of converting it through the browser timezone.
+      else if (/^\d{4}-\d{2}-\d{2}T/.test(dateValue)) {
+        const parts = dateValue.slice(0, 10).split('-');
+        year = parseInt(parts[0], 10);
+        month = parseInt(parts[1], 10) - 1;
+        day = parseInt(parts[2], 10);
       }
       // YYYY-MM-DD format - parse directly without Date object to avoid timezone issues
       else if (/^\d{4}-\d{2}-\d{2}$/.test(dateValue)) {
@@ -185,7 +188,6 @@ function formatDateDMY(dateValue) {
     }
     
     const result = `${String(day).padStart(2, '0')} ${monthNames[month]} ${year}`;
-    console.log('[formatDateDMY] Output:', result, 'from', { day, month: month + 1, year });
     return result;
   } catch (e) {
     console.warn('formatDateDMY error:', e, 'value:', dateValue);

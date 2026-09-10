@@ -154,38 +154,43 @@ const binderDefinitions: BinderDefinition[] = [
   { id: 'b16-em-air', groupId: 'B16', buildingFilter: 'Building 16', workflowId: 'em-air', label: 'Air Sampling', iconId: 'icon-air-sampling', secondaryFilter: { samplingMode: ['passive', 'active'] }, state: 'active', spineLocation: 'BUILDING 16', order: 3 },
   { id: 'b16-ca-n2', groupId: 'B16', buildingFilter: 'Building 16', workflowId: 'compressed-air', label: 'CA & Nitrogen', iconId: 'icon-compressed-air', secondaryFilter: { gasType: ['CA', 'N2'] }, state: 'active', spineLocation: 'OCL BUILDING 16', spineSuffix: 'AND NITROGEN', order: 4 },
   { id: 'b16-cv', groupId: 'B16', buildingFilter: 'Building 16', workflowId: 'cv', label: 'Cleaning Validation', iconId: 'icon-cleaning-validation', secondaryFilter: { samplingFamily: 'all' }, state: 'active', spineLocation: 'BUILDING 16', order: 5 },
-  { id: 'other-locations', groupId: 'OTHER', buildingFilter: null, workflowId: 'em-air', label: 'Other Locations', iconId: 'icon-other-locations', state: 'active', spineLocation: 'BUILDING 11 & 19', spineCode: 'OTHER LOCATIONS', spineOverride: { th: [], en: ['AIR SAMPLING, CA', 'AND PRW RECORDS'] }, ownRoute: '/binder/other-locations', order: 1 },
+  { id: 'other-water', groupId: 'OTHER', buildingFilter: 'Other', workflowId: 'pw-prw', label: 'Other — Water', iconId: 'icon-water-prw-pw', secondaryFilter: { waterType: 'all' }, state: 'active', spineLocation: 'OTHER LOCATIONS', spineCode: 'OTHER — WATER', spineOverride: { th: [], en: ['PRW, PW, WFI', 'AND PUS RECORDS'] }, order: 1 },
+  { id: 'other-air', groupId: 'OTHER', buildingFilter: 'Other', workflowId: 'em-air', label: 'Other — Air', iconId: 'icon-air-sampling', secondaryFilter: { samplingMode: ['passive', 'active'] }, state: 'active', spineLocation: 'OTHER LOCATIONS', spineCode: 'OTHER — AIR', order: 2 },
+  { id: 'other-ca', groupId: 'OTHER', buildingFilter: 'Other', workflowId: 'compressed-air', label: 'Other — CA', iconId: 'icon-compressed-air', secondaryFilter: { gasType: ['CA', 'N2'] }, state: 'active', spineLocation: 'OTHER LOCATIONS', spineCode: 'OTHER — CA', order: 3 },
+  { id: 'other-cv', groupId: 'OTHER', buildingFilter: 'Other', workflowId: 'cv', label: 'Other — CV', iconId: 'icon-cleaning-validation', secondaryFilter: { samplingFamily: 'all' }, state: 'active', spineLocation: 'OTHER LOCATIONS', spineCode: 'OTHER — CV', order: 4 },
   { id: 'reserve-spare', groupId: 'RESERVE', buildingFilter: null, workflowId: 'em-air', label: 'Coming Soon', iconId: 'icon-coming-soon', state: 'coming-soon', spineLocation: '', spineCode: 'COMING SOON', spineOverride: { th: [], en: [] }, order: 1 }
 ];
 
 /* What is inside the orange binder. Building 11 and Building 19 share one
  * physical file on the shelf, so they share one binder here. */
+export function listRoute(building?: string | null, workflowId?: WorkflowId, secondaryFilter?: Record<string, string | string[]>) {
+  const params = new URLSearchParams();
+  if (building) params.set('building', building);
+  if (workflowId) params.set('workflow', workflowId);
+  Object.entries(secondaryFilter || {}).forEach(([key, value]) => {
+    if (value) params.set(key, Array.isArray(value) ? value.join(',') : value);
+  });
+  const query = params.toString();
+  return `/list${query ? `?${query}` : ''}`;
+}
+
 export const otherLocationSections: BinderSection[] = [
-  { id: 'b11-em-air', label: 'Building 11 · Air Sampling', detail: 'Passive and active air sampler', route: '/records/air/em-air?building=Building%2011&samplingMode=passive,active' },
-  { id: 'b11-ca', label: 'Building 11 · Compressed Air', detail: 'Compressed air sampling', route: '/records/air/compressed-air?building=Building%2011&gasType=CA' },
-  { id: 'b19-prw', label: 'Building 19 · PRW', detail: 'Process raw water', route: '/records/water/pw-prw?building=Building%2019&waterType=PRW' }
+  { id: 'b11-em-air', label: 'Building 11 · Air Sampling', detail: 'Passive and active air sampler', route: listRoute('Other', 'em-air', { samplingMode: ['passive', 'active'] }) },
+  { id: 'b11-ca', label: 'Building 11 · Compressed Air', detail: 'Compressed air sampling', route: listRoute('Other', 'compressed-air', { gasType: 'CA' }) },
+  { id: 'b19-prw', label: 'Building 19 · PRW', detail: 'Process raw water', route: listRoute('Other', 'pw-prw', { waterType: 'all' }) }
 ];
 
 function binderRoute(definition: BinderDefinition) {
   if (definition.state !== 'active') return null;
   if (definition.ownRoute) return definition.ownRoute;
-  const workflow = workflows.find((candidate) => candidate.id === definition.workflowId);
-  if (!workflow) return null;
-  const params = new URLSearchParams();
-  if (definition.buildingFilter) params.set('building', definition.buildingFilter);
-  Object.entries(definition.secondaryFilter || {}).forEach(([key, value]) => {
-    if (value === 'all') return;
-    params.set(key, Array.isArray(value) ? value.join(',') : value);
-  });
-  const query = params.toString();
-  return `/records/${workflow.domain}/${workflow.id}${query ? `?${query}` : ''}`;
+  return listRoute(definition.buildingFilter, definition.workflowId, definition.secondaryFilter);
 }
 
 export const binderInstances: BinderInstance[] = binderDefinitions.map((definition) => ({
   ...definition,
   route: binderRoute(definition),
   spine: spineFor(definition),
-  sections: definition.id === 'other-locations' ? otherLocationSections : undefined
+  sections: undefined
 }));
 
 /** Binders standing on the shelf, including the reserve file, which is on the
@@ -219,9 +224,7 @@ export function binderForContext(workflowId?: string, building?: string | null) 
     && binder.buildingFilter === building);
   if (direct) return direct;
   const shared = binderInstances.find((binder) =>
-    binder.state === 'active'
-    && binder.sections?.some((section) => section.route.includes(`/${workflowId}?`)
-      && (!building || section.route.includes(encodeURIComponent(building)))));
+    binder.state === 'active' && binder.groupId === 'OTHER' && binder.workflowId === workflowId);
   return shared;
 }
 

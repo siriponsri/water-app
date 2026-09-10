@@ -379,7 +379,7 @@ function mapDataToTags(data, pageSamples) {
     const s = samples[i - 1];
     json[`samplingPoint${idx}`] = s ? (s.samplingPoint || '') : '';
     json[`tagNo${idx}`]         = s ? (s.samplingTag   || '') : '';
-    json[`result${idx}`]        = s && s.result !== undefined ? String(s.result) : '';
+    json[`result${idx}`]        = s ? formatResultValue(s.result) : '';
   }
 
   return json;

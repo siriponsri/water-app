@@ -1,12 +1,12 @@
 import type { Domain } from './appData';
 
-export type BuildingContextValue = '' | 'Building 10' | 'Building 12' | 'Building 16' | 'Building 11' | 'Building 19' | 'Other';
+export type BuildingContextValue = '' | 'Building 10' | 'Building 12' | 'Building 16' | 'Other';
 export type BuildingContext = Record<Domain, BuildingContextValue>;
 
 const STORAGE_KEY = 'anf3.building-context.v1';
 export const BUILDING_CONTEXT_EVENT = 'anf3:building-context';
 const EMPTY: BuildingContext = { water: '', air: '', cv: '' };
-const ALLOWED = new Set<BuildingContextValue>(['', 'Building 10', 'Building 12', 'Building 16', 'Building 11', 'Building 19', 'Other']);
+const ALLOWED = new Set<BuildingContextValue>(['', 'Building 10', 'Building 12', 'Building 16', 'Other']);
 
 function clean(value: unknown): BuildingContextValue {
   const normalized = String(value || '').trim();
@@ -46,7 +46,5 @@ export const buildingChoices: { value: BuildingContextValue; label: string }[] =
   { value: 'Building 10', label: 'Building 10' },
   { value: 'Building 12', label: 'Building 12' },
   { value: 'Building 16', label: 'Building 16' },
-  { value: 'Building 11', label: 'Building 11' },
-  { value: 'Building 19', label: 'Building 19' },
   { value: 'Other', label: 'Other Locations' }
 ];

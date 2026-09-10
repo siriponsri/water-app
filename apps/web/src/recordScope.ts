@@ -6,7 +6,7 @@ function token(value: unknown) {
 }
 
 /**
- * A building label reduced to its segment: `B10`, `B11`, `B12`, `B16`, `B19`.
+ * A building label reduced to its segment: `B10`, `B12`, `B16`, or `OTHER`.
  *
  * The `building` column is free text and every form of it exists in the live
  * data — `Building 12`, `B12`, `12`, `bldg-12` — because the System DB returns
@@ -20,8 +20,8 @@ function token(value: unknown) {
  */
 export function buildingSegment(value: unknown) {
   const normalized = String(value || '').trim().toUpperCase().replace(/[\s_.-]+/g, '');
-  const match = normalized.match(/^(?:BUILDING|BLDG|BLD|B)?(10|11|12|16|19)$/);
-  return match ? `B${match[1]}` : token(value);
+  const match = normalized.match(/^(?:BUILDING|BLDG|BLD|B)?(10|12|16)$/);
+  return match ? `B${match[1]}` : 'OTHER';
 }
 
 /** Filter-only building parsing. Composite source text such as
@@ -29,10 +29,10 @@ export function buildingSegment(value: unknown) {
  * the physical Other shard without changing worksheet-number normalization. */
 export function buildingFilterSegment(value: unknown) {
   const raw = String(value || '').trim().toUpperCase();
-  const composite = raw.match(/(?:BUILDING|BLDG|BLD)\s*[-_:()]*\s*(10|11|12|16|19)\b/);
-  const code = raw.match(/\bB\s*(10|11|12|16|19)\b/);
+  const composite = raw.match(/(?:BUILDING|BLDG|BLD)\s*[-_:()]*\s*(10|12|16)\b/);
+  const code = raw.match(/\bB\s*(10|12|16)\b/);
   const normalized = raw.replace(/[\s_.-]+/g, '');
-  const direct = normalized.match(/^(?:BUILDING|BLDG|BLD|B)?(10|11|12|16|19)$/);
+  const direct = normalized.match(/^(?:BUILDING|BLDG|BLD|B)?(10|12|16)$/);
   const match = composite || code || direct;
   if (match) return `B${match[1]}`;
   return 'OTHER';

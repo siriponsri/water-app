@@ -12,6 +12,15 @@ describe('record scope filtering', () => {
     expect(filterRecordScope(items, { building: 'Building 10' }).map((item) => item.recordKey)).toEqual(['1', '3']);
   });
 
+  it('defensively removes mixed-building summaries returned by an old deployment', () => {
+    const mixed = [
+      { recordKey: 'b10', building: 'Building 10' },
+      { recordKey: 'b12', building: 'Building 12' },
+      { recordKey: 'other', building: 'Building 19' }
+    ];
+    expect(filterRecordScope(mixed, { building: 'Building 10' }).map((item) => item.recordKey)).toEqual(['b10']);
+  });
+
   it('keeps only the selected CV family', () => {
     expect(filterRecordScope(items, { building: 'Building 10', samplingFamily: 'contact-plate' }).map((item) => item.recordKey)).toEqual(['3']);
   });
@@ -37,21 +46,20 @@ describe('record scope filtering', () => {
       expect(filterRecordScope(drifted, { building: 'Building 12' }).map((item) => item.recordKey)).toEqual(['a', 'b', 'c']);
     });
 
-    it('covers Building 11 and 19, which share the Other Locations binder', () => {
-      expect(buildingSegment('Building 11')).toBe('B11');
-      expect(buildingSegment('Building 19')).toBe('B19');
+    it('routes legacy Building 11 and 19 records to Other Locations', () => {
+      expect(buildingSegment('Building 11')).toBe('OTHER');
+      expect(buildingSegment('Building 19')).toBe('OTHER');
       const other = [
         { recordKey: 'a', building: 'Building 11' },
         { recordKey: 'b', building: 'B19' },
         { recordKey: 'c', building: 'Building 10' },
       ];
-      expect(filterRecordScope(other, { building: 'Building 11' }).map((item) => item.recordKey)).toEqual(['a']);
-      expect(filterRecordScope(other, { building: 'Building 19' }).map((item) => item.recordKey)).toEqual(['b']);
+      expect(filterRecordScope(other, { building: 'Other' }).map((item) => item.recordKey)).toEqual(['a', 'b']);
     });
 
-    it('does not let an unrecognised label match everything', () => {
+    it('groups unrecognised labels in Other rather than matching everything', () => {
       const rows = [{ recordKey: 'a', building: 'Warehouse' }, { recordKey: 'b', building: 'Building 10' }];
-      expect(filterRecordScope(rows, { building: 'Warehouse' }).map((item) => item.recordKey)).toEqual(['a']);
+      expect(filterRecordScope(rows, { building: 'Other' }).map((item) => item.recordKey)).toEqual(['a']);
     });
   });
 
