@@ -1,0 +1,772 @@
+{
+  "schemaVersion": 1,
+  "source": {
+    "file": "inventory_catalog.pdf",
+    "sha256": "F6DDDE2826C1DE34873FCCAB883F075788022C42565DBBC6D80E7F1EAA5BC71C",
+    "pages": 16,
+    "format": "A4 raster PDF"
+  },
+  "rowCount": 95,
+  "items": [
+    {
+      "sequence": 1,
+      "materialCode": "71000001",
+      "name": "กระดาษถ่ายเอกสาร B4 80 แกรม (F14)",
+      "unit": "RE",
+      "page": 1,
+      "reviewed": true
+    },
+    {
+      "sequence": 2,
+      "materialCode": "71000002",
+      "name": "กระดาษถ่ายเอกสาร A4 80 แกรม",
+      "unit": "RE",
+      "page": 1,
+      "reviewed": true
+    },
+    {
+      "sequence": 3,
+      "materialCode": "71000003",
+      "name": "กระดาษถ่ายเอกสาร A3 80 แกรม",
+      "unit": "RE",
+      "page": 1,
+      "reviewed": true
+    },
+    {
+      "sequence": 4,
+      "materialCode": "71000005",
+      "name": "กระดาษคาร์บอน สีน้ำเงิน",
+      "unit": "BOX",
+      "page": 1,
+      "reviewed": true
+    },
+    {
+      "sequence": 5,
+      "materialCode": "71000006",
+      "name": "กระดาษคาร์บอน สีดำ",
+      "unit": "BOX",
+      "page": 1,
+      "reviewed": true
+    },
+    {
+      "sequence": 6,
+      "materialCode": "71000007",
+      "name": "กระดาษบวกเลข 2 1/4 นิ้ว",
+      "unit": "ROL",
+      "page": 1,
+      "reviewed": true
+    },
+    {
+      "sequence": 7,
+      "materialCode": "71000009",
+      "name": "สมุดปกอ่อน 40 แผ่น",
+      "unit": "EA",
+      "page": 2,
+      "reviewed": true
+    },
+    {
+      "sequence": 8,
+      "materialCode": "71000010",
+      "name": "สมุดปกแข็ง 100 แผ่น",
+      "unit": "EA",
+      "page": 2,
+      "reviewed": true
+    },
+    {
+      "sequence": 9,
+      "materialCode": "71000011",
+      "name": "สมุดปกแข็ง สีน้ำเงิน No.3 ใหญ่ 25x36 ซม.",
+      "unit": "EA",
+      "page": 2,
+      "reviewed": true
+    },
+    {
+      "sequence": 10,
+      "materialCode": "71000012",
+      "name": "สมุดปกแข็ง สีน้ำเงิน No.3 เล็ก 20.5x33 ซม.",
+      "unit": "EA",
+      "page": 2,
+      "reviewed": true
+    },
+    {
+      "sequence": 11,
+      "materialCode": "71000013",
+      "name": "สมุดส่งหนังสือ (เล่มเล็ก) 20.5x27 ซม.",
+      "unit": "EA",
+      "page": 2,
+      "reviewed": true
+    },
+    {
+      "sequence": 12,
+      "materialCode": "71000014",
+      "name": "สมุดทะเบียนรับ-ส่งหนังสือ (เล่มใหญ่)",
+      "unit": "EA",
+      "page": 2,
+      "reviewed": true
+    },
+    {
+      "sequence": 13,
+      "materialCode": "71000015",
+      "name": "สมุดใบเบิกของ",
+      "unit": "EA",
+      "page": 3,
+      "reviewed": true
+    },
+    {
+      "sequence": 14,
+      "materialCode": "71000016",
+      "name": "สมุดใบเสนองาน (อ.3)",
+      "unit": "EA",
+      "page": 3,
+      "reviewed": true
+    },
+    {
+      "sequence": 15,
+      "materialCode": "71000019",
+      "name": "บ.ใบสำคัญจ่ายเงิน",
+      "unit": "RE",
+      "page": 3,
+      "reviewed": true
+    },
+    {
+      "sequence": 16,
+      "materialCode": "71000024",
+      "name": "แท่นประทับตรา สีน้ำเงิน",
+      "unit": "EA",
+      "page": 3,
+      "reviewed": true
+    },
+    {
+      "sequence": 17,
+      "materialCode": "71000025",
+      "name": "แท่นประทับตรา สีแดง",
+      "unit": "EA",
+      "page": 3,
+      "reviewed": true
+    },
+    {
+      "sequence": 18,
+      "materialCode": "71000026",
+      "name": "แท่นประทับตรา สีม่วง",
+      "unit": "EA",
+      "page": 3,
+      "reviewed": true
+    },
+    {
+      "sequence": 19,
+      "materialCode": "71000027",
+      "name": "หมึกเติมแท่นประทับตรา สีน้ำเงิน",
+      "unit": "EA",
+      "page": 4,
+      "reviewed": true
+    },
+    {
+      "sequence": 20,
+      "materialCode": "71000028",
+      "name": "หมึกเติมแท่นประทับตรา สีแดง",
+      "unit": "EA",
+      "page": 4,
+      "reviewed": true
+    },
+    {
+      "sequence": 21,
+      "materialCode": "71000029",
+      "name": "หมึกเติมแท่นประทับตรา สีม่วง (พีริแกน)",
+      "unit": "EA",
+      "page": 4,
+      "reviewed": true
+    },
+    {
+      "sequence": 22,
+      "materialCode": "71000030",
+      "name": "หมึกตอกตัวเลข 6 หลัก (ENM)",
+      "unit": "EA",
+      "page": 4,
+      "reviewed": true
+    },
+    {
+      "sequence": 23,
+      "materialCode": "71000031",
+      "name": "ผ้าหมึกเครื่องคิดเลข สีดำ-แดง",
+      "unit": "ROL",
+      "page": 4,
+      "reviewed": true
+    },
+    {
+      "sequence": 24,
+      "materialCode": "71000034",
+      "name": "ผ้าหมึก Oki 790",
+      "unit": "ROL",
+      "page": 4,
+      "reviewed": true
+    },
+    {
+      "sequence": 25,
+      "materialCode": "71000035",
+      "name": "เทปลบคำผิด",
+      "unit": "EA",
+      "page": 5,
+      "reviewed": true
+    },
+    {
+      "sequence": 26,
+      "materialCode": "71000036",
+      "name": "ยางลบดินสอ",
+      "unit": "EA",
+      "page": 5,
+      "reviewed": true
+    },
+    {
+      "sequence": 27,
+      "materialCode": "71000038",
+      "name": "ไม้บรรทัดพลาสติก ขนาด 12 นิ้ว",
+      "unit": "EA",
+      "page": 5,
+      "reviewed": true
+    },
+    {
+      "sequence": 28,
+      "materialCode": "71000039",
+      "name": "ตรายางตัวเลข 6 หลัก",
+      "unit": "EA",
+      "page": 5,
+      "reviewed": true
+    },
+    {
+      "sequence": 29,
+      "materialCode": "71000040",
+      "name": "ตรายางวันที่ (ภาษาไทย)",
+      "unit": "EA",
+      "page": 5,
+      "reviewed": true
+    },
+    {
+      "sequence": 30,
+      "materialCode": "71000041",
+      "name": "ปากกาลูกลื่น สีน้ำเงิน",
+      "unit": "EA",
+      "page": 5,
+      "reviewed": true
+    },
+    {
+      "sequence": 31,
+      "materialCode": "71000042",
+      "name": "ปากกาลูกลื่น สีแดง",
+      "unit": "EA",
+      "page": 6,
+      "reviewed": true
+    },
+    {
+      "sequence": 32,
+      "materialCode": "71000043",
+      "name": "ปากกาเขียนกล่อง สีน้ำเงิน หัวกลม No.107",
+      "unit": "EA",
+      "page": 6,
+      "reviewed": true
+    },
+    {
+      "sequence": 33,
+      "materialCode": "71000044",
+      "name": "ปากกาเขียนกล่อง สีแดง หัวกลม No.107",
+      "unit": "EA",
+      "page": 6,
+      "reviewed": true
+    },
+    {
+      "sequence": 34,
+      "materialCode": "71000045",
+      "name": "ปากกาเมจิก แท่งเล็ก",
+      "unit": "EA",
+      "page": 6,
+      "reviewed": true
+    },
+    {
+      "sequence": 35,
+      "materialCode": "71000046",
+      "name": "ดินสอ (HB)",
+      "unit": "EA",
+      "page": 6,
+      "reviewed": true
+    },
+    {
+      "sequence": 36,
+      "materialCode": "71000047",
+      "name": "ลวดเย็บกระดาษ เบอร์ 10",
+      "unit": "BOX",
+      "page": 6,
+      "reviewed": true
+    },
+    {
+      "sequence": 37,
+      "materialCode": "71000048",
+      "name": "ลวดเย็บกระดาษ เบอร์ 8",
+      "unit": "BOX",
+      "page": 7,
+      "reviewed": true
+    },
+    {
+      "sequence": 38,
+      "materialCode": "71000049",
+      "name": "ลวดเย็บกระดาษ เบอร์ 35",
+      "unit": "BOX",
+      "page": 7,
+      "reviewed": true
+    },
+    {
+      "sequence": 39,
+      "materialCode": "71000050",
+      "name": "ลวดเสียบกระดาษ เบอร์ 1",
+      "unit": "BOX",
+      "page": 7,
+      "reviewed": true
+    },
+    {
+      "sequence": 40,
+      "materialCode": "71000051",
+      "name": "ที่หนีบกระดาษ สีดำ เบอร์ 109 (ใหญ่)",
+      "unit": "EA",
+      "page": 7,
+      "reviewed": true
+    },
+    {
+      "sequence": 41,
+      "materialCode": "71000052",
+      "name": "ที่หนีบกระดาษ สีดำ เบอร์ 110 (เล็ก)",
+      "unit": "EA",
+      "page": 7,
+      "reviewed": true
+    },
+    {
+      "sequence": 42,
+      "materialCode": "71000053",
+      "name": "ซองสีน้ำตาล ตราองค์การฯ 7\"x10\"",
+      "unit": "EN",
+      "page": 7,
+      "reviewed": true
+    },
+    {
+      "sequence": 43,
+      "materialCode": "71000054",
+      "name": "ซองสีน้ำตาล ตราองค์การฯ 9\"x12\"",
+      "unit": "EN",
+      "page": 8,
+      "reviewed": true
+    },
+    {
+      "sequence": 44,
+      "materialCode": "71000055",
+      "name": "ซองสีน้ำตาลขยายข้าง ตราองค์การฯ 9\"x13\"",
+      "unit": "EN",
+      "page": 8,
+      "reviewed": true
+    },
+    {
+      "sequence": 45,
+      "materialCode": "71000056",
+      "name": "ซองสีน้ำตาลขยายข้าง ตราองค์การฯ 11\"x17\"",
+      "unit": "EN",
+      "page": 8,
+      "reviewed": true
+    },
+    {
+      "sequence": 46,
+      "materialCode": "71000057",
+      "name": "ซองสีขาว พับ 4 ตราองค์การฯ",
+      "unit": "EN",
+      "page": 8,
+      "reviewed": true
+    },
+    {
+      "sequence": 47,
+      "materialCode": "71000058",
+      "name": "ซองหน้าต่างสีขาว พับ 4 ตราองค์การฯ",
+      "unit": "EN",
+      "page": 8,
+      "reviewed": true
+    },
+    {
+      "sequence": 48,
+      "materialCode": "71000059",
+      "name": "ซองสีขาว พับ 4 ไม่มีครุฑ (ซองเปล่า)",
+      "unit": "EN",
+      "page": 8,
+      "reviewed": true
+    },
+    {
+      "sequence": 49,
+      "materialCode": "71000060",
+      "name": "เทปใส ขนาด 3/4 นิ้ว x 72 หลา",
+      "unit": "ROL",
+      "page": 9,
+      "reviewed": true
+    },
+    {
+      "sequence": 50,
+      "materialCode": "71000061",
+      "name": "เชือกผูกพัสดุไปรษณีย์",
+      "unit": "ROL",
+      "page": 9,
+      "reviewed": true
+    },
+    {
+      "sequence": 51,
+      "materialCode": "71000062",
+      "name": "แฟ้มเจาะ 500 แกรม ขนาด 14 นิ้ว",
+      "unit": "EA",
+      "page": 9,
+      "reviewed": true
+    },
+    {
+      "sequence": 52,
+      "materialCode": "71000063",
+      "name": "แฟ้มปกอ่อน สีน้ำตาล ตราองค์การฯ",
+      "unit": "PAC",
+      "page": 9,
+      "reviewed": true
+    },
+    {
+      "sequence": 53,
+      "materialCode": "71000064",
+      "name": "แฟ้มตราช้าง No.120 A4 สีดำหรือยี่ห้ออื่น",
+      "unit": "EA",
+      "page": 9,
+      "reviewed": true
+    },
+    {
+      "sequence": 54,
+      "materialCode": "71000065",
+      "name": "แฟ้มตราช้าง No.120 F สีดำหรือยี่ห้ออื่น",
+      "unit": "EA",
+      "page": 9,
+      "reviewed": true
+    },
+    {
+      "sequence": 55,
+      "materialCode": "71000066",
+      "name": "แฟ้มตราช้าง No.125 A4 สีดำหรือยี่ห้ออื่น",
+      "unit": "EA",
+      "page": 10,
+      "reviewed": true
+    },
+    {
+      "sequence": 56,
+      "materialCode": "71000067",
+      "name": "แฟ้มตราช้าง No.125 F สีดำ หรือยี่ห้ออื่น",
+      "unit": "EA",
+      "page": 10,
+      "reviewed": true
+    },
+    {
+      "sequence": 57,
+      "materialCode": "71000068",
+      "name": "แฟ้มตราช้าง No.210P/A4 สีดำหรือยี่ห้ออื่น",
+      "unit": "EA",
+      "page": 10,
+      "reviewed": true
+    },
+    {
+      "sequence": 58,
+      "materialCode": "71000069",
+      "name": "แฟ้มตราช้าง No.210 P/F สีดำหรือยี่ห้ออื่น",
+      "unit": "EA",
+      "page": 10,
+      "reviewed": true
+    },
+    {
+      "sequence": 59,
+      "materialCode": "71000070",
+      "name": "แฟ้มตราช้าง No.610 A4 สีดำหรือยี่ห้ออื่น",
+      "unit": "EA",
+      "page": 10,
+      "reviewed": true
+    },
+    {
+      "sequence": 60,
+      "materialCode": "71000071",
+      "name": "แฟ้มตราช้าง No.610 F สีดำ หรือยี่ห้ออื่น",
+      "unit": "EA",
+      "page": 10,
+      "reviewed": true
+    },
+    {
+      "sequence": 61,
+      "materialCode": "71000072",
+      "name": "แฟ้มตราช้าง No.620 A4 สีดำหรือยี่ห้ออื่น",
+      "unit": "EA",
+      "page": 11,
+      "reviewed": true
+    },
+    {
+      "sequence": 62,
+      "materialCode": "71000073",
+      "name": "แฟ้มตราช้าง No.620 F สีดำหรือยี่ห้ออื่น",
+      "unit": "EA",
+      "page": 11,
+      "reviewed": true
+    },
+    {
+      "sequence": 63,
+      "materialCode": "71000074",
+      "name": "กระดาษพิมพ์ต่อเนื่อง 9\" x 11\" 1 ชั้น",
+      "unit": "BOX",
+      "page": 11,
+      "reviewed": true
+    },
+    {
+      "sequence": 64,
+      "materialCode": "71000075",
+      "name": "กระดาษพิมพ์ต่อเนื่อง 9\" x 11\" 2 ชั้น",
+      "unit": "BOX",
+      "page": 11,
+      "reviewed": true
+    },
+    {
+      "sequence": 65,
+      "materialCode": "71000076",
+      "name": "กระดาษพิมพ์ต่อเนื่อง 9\" x 11\" 3 ชั้น",
+      "unit": "BOX",
+      "page": 11,
+      "reviewed": true
+    },
+    {
+      "sequence": 66,
+      "materialCode": "71000077",
+      "name": "กระดาษพิมพ์ต่อเนื่อง 11\" x 11\" 1 ชั้น",
+      "unit": "BOX",
+      "page": 11,
+      "reviewed": true
+    },
+    {
+      "sequence": 67,
+      "materialCode": "71000078",
+      "name": "กระดาษพิมพ์ต่อเนื่อง 11\" x 11\" 2 ชั้น",
+      "unit": "BOX",
+      "page": 12,
+      "reviewed": true
+    },
+    {
+      "sequence": 68,
+      "materialCode": "71000080",
+      "name": "กระดาษพิมพ์ต่อเนื่อง 15\" x 11\" 1 ชั้น",
+      "unit": "BOX",
+      "page": 12,
+      "reviewed": true
+    },
+    {
+      "sequence": 69,
+      "materialCode": "71000081",
+      "name": "กระดาษพิมพ์ต่อเนื่อง 15\" x 11\" 2 ชั้น",
+      "unit": "BOX",
+      "page": 12,
+      "reviewed": true
+    },
+    {
+      "sequence": 70,
+      "materialCode": "71000082",
+      "name": "กระดาษพิมพ์ต่อเนื่อง 15\" x 11\" 3 ชั้น",
+      "unit": "BOX",
+      "page": 12,
+      "reviewed": true
+    },
+    {
+      "sequence": 71,
+      "materialCode": "71000115",
+      "name": "ผ้าหมึก Cartridge EPSON LQ-2090",
+      "unit": "EA",
+      "page": 12,
+      "reviewed": true
+    },
+    {
+      "sequence": 72,
+      "materialCode": "71000116",
+      "name": "ผ้าหมึก Cartridge EPSON LQ-2170/2070/2180",
+      "unit": "EA",
+      "page": 12,
+      "reviewed": true
+    },
+    {
+      "sequence": 73,
+      "materialCode": "71000117",
+      "name": "หมึกพิมพ์ริบบอน",
+      "unit": "ROL",
+      "page": 13,
+      "reviewed": true
+    },
+    {
+      "sequence": 74,
+      "materialCode": "71000119",
+      "name": "ซองอเนกประสงค์ 11 รู A4 หนา 0.05 มม.",
+      "unit": "PAC",
+      "page": 13,
+      "reviewed": true
+    },
+    {
+      "sequence": 75,
+      "materialCode": "71000120",
+      "name": "ซองอเนกประสงค์ 11 รู A4 หนา 0.09 มม.",
+      "unit": "PAC",
+      "page": 13,
+      "reviewed": true
+    },
+    {
+      "sequence": 76,
+      "materialCode": "71000121",
+      "name": "กรรไกร 8 นิ้ว",
+      "unit": "EA",
+      "page": 13,
+      "reviewed": true
+    },
+    {
+      "sequence": 77,
+      "materialCode": "71000122",
+      "name": "มีดคัตเตอร์ ด้ามสแตนเลส 18 มม.",
+      "unit": "EA",
+      "page": 13,
+      "reviewed": true
+    },
+    {
+      "sequence": 78,
+      "materialCode": "71000123",
+      "name": "ใบมีดคัตเตอร์ 18 มม.",
+      "unit": "EA",
+      "page": 13,
+      "reviewed": true
+    },
+    {
+      "sequence": 79,
+      "materialCode": "71000124",
+      "name": "ที่เย็บกระดาษ (เล็ก) 10-20 แผ่น",
+      "unit": "EA",
+      "page": 14,
+      "reviewed": true
+    },
+    {
+      "sequence": 80,
+      "materialCode": "71000125",
+      "name": "ที่เย็บกระดาษ (กลาง) 25-35 แผ่น",
+      "unit": "EA",
+      "page": 14,
+      "reviewed": true
+    },
+    {
+      "sequence": 81,
+      "materialCode": "71000126",
+      "name": "ที่เย็บกระดาษ (ใหญ่) 60 แผ่น",
+      "unit": "EA",
+      "page": 14,
+      "reviewed": true
+    },
+    {
+      "sequence": 82,
+      "materialCode": "71000127",
+      "name": "ที่หนีบกระดาษ สีดำ No.111",
+      "unit": "BOX",
+      "page": 14,
+      "reviewed": true
+    },
+    {
+      "sequence": 83,
+      "materialCode": "71000128",
+      "name": "ที่หนีบกระดาษ สีดำ No.112",
+      "unit": "BOX",
+      "page": 14,
+      "reviewed": true
+    },
+    {
+      "sequence": 84,
+      "materialCode": "71000130",
+      "name": "แปรงทองเหลือง มีด้าม",
+      "unit": "EA",
+      "page": 14,
+      "reviewed": true
+    },
+    {
+      "sequence": 85,
+      "materialCode": "71000131",
+      "name": "แปรงทองเหลือง รูปไข่",
+      "unit": "EA",
+      "page": 15,
+      "reviewed": true
+    },
+    {
+      "sequence": 86,
+      "materialCode": "71000132",
+      "name": "ผ้าก๊อส ขนาด 36 นิ้ว x 100 หลา",
+      "unit": "ROL",
+      "page": 15,
+      "reviewed": true
+    },
+    {
+      "sequence": 87,
+      "materialCode": "71000133",
+      "name": "อลูมิเนียมฟอยด์ ขนาด 457 มม. x 7.62 ม.",
+      "unit": "ROL",
+      "page": 15,
+      "reviewed": true
+    },
+    {
+      "sequence": 88,
+      "materialCode": "71000160",
+      "name": "เชือกพลาสติกผูกของ",
+      "unit": "ROL",
+      "page": 15,
+      "reviewed": true
+    },
+    {
+      "sequence": 89,
+      "materialCode": "71000161",
+      "name": "กระดาษชำระ",
+      "unit": "ROL",
+      "page": 15,
+      "reviewed": true
+    },
+    {
+      "sequence": 90,
+      "materialCode": "71000162",
+      "name": "ผงซักฟอก",
+      "unit": "PAC",
+      "page": 15,
+      "reviewed": true
+    },
+    {
+      "sequence": 91,
+      "materialCode": "71000163",
+      "name": "ฝอยขัด",
+      "unit": "EA",
+      "page": 16,
+      "reviewed": true
+    },
+    {
+      "sequence": 92,
+      "materialCode": "71000165",
+      "name": "ถุงใส่ขยะ สีดำ ขนาดใหญ่ 36\"x45\"",
+      "unit": "PAC",
+      "page": 16,
+      "reviewed": true
+    },
+    {
+      "sequence": 93,
+      "materialCode": "71000166",
+      "name": "หมวก GMP (Hair Cover)",
+      "unit": "EA",
+      "page": 16,
+      "reviewed": true
+    },
+    {
+      "sequence": 94,
+      "materialCode": "71000167",
+      "name": "รองเท้า GMP (Shoe Cover)",
+      "unit": "PAA",
+      "page": 16,
+      "reviewed": true
+    },
+    {
+      "sequence": 95,
+      "materialCode": "71000170",
+      "name": "ยางรัดของ วงใหญ่",
+      "unit": "KG",
+      "page": 16,
+      "reviewed": true
+    }
+  ]
+}

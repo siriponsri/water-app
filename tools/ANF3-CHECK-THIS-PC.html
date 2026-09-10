@@ -1,0 +1,307 @@
+<!doctype html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ANF3 · ตรวจเครื่องนี้</title>
+<!--
+  ANF3 Laboratory Records — machine probe
+  ---------------------------------------------------------------------------
+  Why this exists instead of a specification sheet.
+
+  The decisions that matter for this workspace are not the ones a purchase
+  order records. A model number does not say whether the corporate image has
+  hardware acceleration switched off by policy, which is the single biggest
+  factor in how the 3D shelf behaves — with it off, the whole scene runs on a
+  software rasteriser and no amount of tuning shadows will help. It also does
+  not say what the browser actually is on the day, what the panel resolution
+  is, or how much memory a forty-worksheet print preview may use.
+
+  So this measures the machine instead of describing it. One file, no network,
+  no install: copy it to a laboratory PC, double-click, press the button, send
+  back the summary.
+-->
+<style>
+  :root {
+    color-scheme: light;
+    --ink: #1a1714;
+    --muted: #55504a;
+    --rule: #d8d2c9;
+    --paper: #f7f5f1;
+    --card: #ffffff;
+    --ok: #1f6b3a;
+    --warn: #8a5a00;
+    --bad: #a5271c;
+    --mono: ui-monospace, "IBM Plex Mono", Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 24px;
+    background: var(--paper); color: var(--ink);
+    font: 15px/1.6 "IBM Plex Sans Thai", "Segoe UI", system-ui, sans-serif;
+  }
+  main { max-width: 780px; margin: 0 auto; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin: 0 0 24px; }
+  .card {
+    background: var(--card); border: 1px solid var(--rule);
+    border-radius: 4px; padding: 16px 20px; margin-bottom: 16px;
+  }
+  button {
+    font: inherit; font-weight: 600;
+    padding: 12px 22px; border: 0; border-radius: 4px;
+    background: var(--ink); color: #fff; cursor: pointer;
+  }
+  button:disabled { opacity: .5; cursor: progress; }
+  table { width: 100%; border-collapse: collapse; }
+  td { padding: 7px 0; border-bottom: 1px solid var(--rule); vertical-align: top; }
+  td:first-child { width: 42%; color: var(--muted); }
+  td:last-child { font-family: var(--mono); font-size: 13px; word-break: break-word; }
+  .verdict { font-weight: 600; padding: 12px 16px; border-radius: 4px; margin-bottom: 8px; }
+  .v-ok   { background: #e8f3ec; color: var(--ok); }
+  .v-warn { background: #fbf1de; color: var(--warn); }
+  .v-bad  { background: #fbeae8; color: var(--bad); }
+  textarea {
+    width: 100%; min-height: 260px; margin-top: 10px;
+    font-family: var(--mono); font-size: 12px; line-height: 1.5;
+    padding: 12px; border: 1px solid var(--rule); border-radius: 4px;
+    background: var(--paper);
+  }
+  .hint { color: var(--muted); font-size: 13px; }
+  canvas { display: block; width: 320px; height: 180px; border: 1px solid var(--rule); border-radius: 3px; }
+  .running { color: var(--muted); }
+</style>
+</head>
+<body>
+<main>
+  <h1>ANF3 · ตรวจเครื่องนี้</h1>
+  <p class="sub">
+    เปิดไฟล์นี้บนเครื่องที่จะใช้งานจริง กดปุ่มเดียว รอประมาณ 15 วินาที
+    แล้วคัดลอกข้อความในกล่องล่างสุดส่งกลับมา ไม่ต่อเน็ต ไม่ติดตั้งอะไร
+    ไม่เก็บข้อมูลอะไรไว้
+  </p>
+
+  <div class="card">
+    <button id="go">เริ่มตรวจ</button>
+    <p class="hint" id="status" style="margin:12px 0 0">
+      ระหว่างตรวจจะมีภาพ 3 มิติเล็กๆ ขึ้นมาสักครู่ อย่าเพิ่งสลับหน้าต่าง
+      เพราะเบราว์เซอร์จะหยุดวาดภาพเมื่อหน้าต่างไม่ได้อยู่ข้างหน้า
+      แล้วผลจะเพี้ยน
+    </p>
+  </div>
+
+  <div id="out"></div>
+
+  <div class="card" id="copybox" hidden>
+    <strong>คัดลอกทั้งหมดนี้ส่งกลับมา</strong>
+    <textarea id="report" readonly></textarea>
+    <p class="hint">กดในกล่องแล้ว Ctrl+A แล้ว Ctrl+C</p>
+  </div>
+</main>
+
+<script>
+(function () {
+  'use strict';
+
+  var go = document.getElementById('go');
+  var statusLine = document.getElementById('status');
+  var out = document.getElementById('out');
+  var copybox = document.getElementById('copybox');
+  var reportBox = document.getElementById('report');
+
+  function row(label, value) { return '<tr><td>' + label + '</td><td>' + value + '</td></tr>'; }
+
+  /* The renderer string is the whole point of this probe. Chrome and Edge
+     report "SwiftShader" or "llvmpipe" when hardware acceleration is off —
+     which a corporate image does more often than people expect, and which no
+     specification sheet would ever tell us. */
+  function gpuInfo() {
+    var canvas = document.createElement('canvas');
+    var gl = canvas.getContext('webgl2') || canvas.getContext('webgl') || canvas.getContext('experimental-webgl');
+    if (!gl) return { ok: false, renderer: '(WebGL ใช้ไม่ได้เลย)', vendor: '', version: '', software: true, maxTexture: 0 };
+    var renderer = '', vendor = '';
+    try {
+      var ext = gl.getExtension('WEBGL_debug_renderer_info');
+      if (ext) {
+        renderer = String(gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) || '');
+        vendor = String(gl.getParameter(ext.UNMASKED_VENDOR_WEBGL) || '');
+      }
+    } catch (e) { /* some builds block it; fall through */ }
+    if (!renderer) renderer = String(gl.getParameter(gl.RENDERER) || '');
+    if (!vendor) vendor = String(gl.getParameter(gl.VENDOR) || '');
+    var soft = /swiftshader|llvmpipe|software|basic render|microsoft basic/i.test(renderer + ' ' + vendor);
+    return {
+      ok: true,
+      renderer: renderer || '(ไม่ทราบ)',
+      vendor: vendor || '(ไม่ทราบ)',
+      version: String(gl.getParameter(gl.VERSION) || ''),
+      webgl2: !!canvas.getContext('webgl2'),
+      software: soft,
+      maxTexture: gl.getParameter(gl.MAX_TEXTURE_SIZE) || 0
+    };
+  }
+
+  /* A deliberately over-drawn scene, so the number means something on a slow
+     machine instead of everything sitting at a comfortable 60. Pure WebGL, no
+     library, so this file stays a single offline document. */
+  function benchmark(seconds, load) {
+    return new Promise(function (resolve) {
+      var canvas = document.createElement('canvas');
+      canvas.width = 640; canvas.height = 360;
+      canvas.style.cssText = 'width:320px;height:180px';
+      var holder = document.getElementById('benchHolder');
+      if (holder) holder.appendChild(canvas);
+      var gl = canvas.getContext('webgl');
+      if (!gl) { resolve(null); return; }
+
+      var vs = 'attribute vec2 p;varying vec2 v;void main(){v=p;gl_Position=vec4(p,0.0,1.0);}';
+      /* Heavy fragment work on purpose: this is a fill-rate test, which is
+         exactly what integrated graphics runs out of first. */
+      var fs = 'precision highp float;varying vec2 v;uniform float t;uniform int n;' +
+        'void main(){vec3 c=vec3(0.0);for(int i=0;i<64;i++){if(i>=n)break;' +
+        'float f=float(i)+1.0;c+=vec3(sin(v.x*f+t),cos(v.y*f-t),sin((v.x+v.y)*f))*0.02;}' +
+        'gl_FragColor=vec4(abs(c),1.0);}';
+      function shader(type, src) { var s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s); return s; }
+      var prog = gl.createProgram();
+      gl.attachShader(prog, shader(gl.VERTEX_SHADER, vs));
+      gl.attachShader(prog, shader(gl.FRAGMENT_SHADER, fs));
+      gl.linkProgram(prog); gl.useProgram(prog);
+      var buf = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+      gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 3,-1, -1,3]), gl.STATIC_DRAW);
+      var loc = gl.getAttribLocation(prog, 'p');
+      gl.enableVertexAttribArray(loc);
+      gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+      var tLoc = gl.getUniformLocation(prog, 't');
+      var nLoc = gl.getUniformLocation(prog, 'n');
+
+      var frames = [], last = performance.now(), start = last;
+      function tick(now) {
+        frames.push(now - last); last = now;
+        gl.uniform1f(tLoc, now / 1000);
+        gl.uniform1i(nLoc, load);
+        gl.drawArrays(gl.TRIANGLES, 0, 3);
+        if (now - start < seconds * 1000) requestAnimationFrame(tick);
+        else {
+          gl.finish();
+          var s = frames.slice(3).sort(function (a, b) { return a - b; });
+          resolve(s.length ? { median: s[Math.floor(s.length / 2)], p95: s[Math.floor(s.length * 0.95)], count: s.length } : null);
+        }
+      }
+      requestAnimationFrame(tick);
+    });
+  }
+
+  function browserName() {
+    var ua = navigator.userAgent;
+    var m;
+    if ((m = ua.match(/Edg\/([\d.]+)/))) return 'Edge ' + m[1];
+    if ((m = ua.match(/OPR\/([\d.]+)/))) return 'Opera ' + m[1];
+    if ((m = ua.match(/Firefox\/([\d.]+)/))) return 'Firefox ' + m[1];
+    if ((m = ua.match(/Chrome\/([\d.]+)/))) return 'Chrome ' + m[1];
+    if (/Trident|MSIE/.test(ua)) return 'Internet Explorer (เก่ามาก)';
+    return 'ไม่ทราบ';
+  }
+
+  go.addEventListener('click', function () {
+    go.disabled = true;
+    statusLine.textContent = 'กำลังตรวจ… อย่าสลับหน้าต่าง';
+    out.innerHTML = '<div class="card"><strong>กำลังวัดความเร็วกราฟิก</strong><div id="benchHolder" style="margin-top:10px"></div><p class="running" id="phase">รอบที่ 1 จาก 2…</p></div>';
+
+    var gpu = gpuInfo();
+
+    setTimeout(function () {
+      benchmark(5, 12).then(function (light) {
+        var phase = document.getElementById('phase');
+        if (phase) phase.textContent = 'รอบที่ 2 จาก 2…';
+        return benchmark(5, 48).then(function (heavy) { return { light: light, heavy: heavy }; });
+      }).then(function (bench) {
+        render(gpu, bench);
+      });
+    }, 60);
+  });
+
+  function render(gpu, bench) {
+    var lightFps = bench.light ? 1000 / bench.light.median : 0;
+    var heavyFps = bench.heavy ? 1000 / bench.heavy.median : 0;
+
+    /* The tiers below are the ones the workspace actually branches on, not
+       generic "good/bad" grades. */
+    var tier, verdictClass, verdictText;
+    if (!gpu.ok) {
+      tier = 'NO-WEBGL';
+      verdictClass = 'v-bad';
+      verdictText = 'เครื่องนี้ใช้ WebGL ไม่ได้เลย — ชั้นวางแฟ้ม 3 มิติจะแสดงเป็นแบบแบนอัตโนมัติ ใช้งานได้ครบทุกฟังก์ชัน';
+    } else if (gpu.software) {
+      tier = 'SOFTWARE';
+      verdictClass = 'v-bad';
+      verdictText = 'เบราว์เซอร์เครื่องนี้ไม่ได้ใช้การ์ดจอ (rendering ด้วย CPU) — ควรให้ IT เปิด hardware acceleration หรือให้ผมตั้งค่าเริ่มต้นเป็นชั้นวางแบบแบน';
+    } else if (heavyFps >= 50) {
+      tier = 'FAST';
+      verdictClass = 'v-ok';
+      verdictText = 'เครื่องนี้เหลือกำลังมาก — เพิ่มรายละเอียดและ motion ได้เต็มที่';
+    } else if (heavyFps >= 25) {
+      tier = 'NORMAL';
+      verdictClass = 'v-ok';
+      verdictText = 'เครื่องนี้ไหวสบาย — ค่าปัจจุบันเหมาะสมแล้ว และยังมี buffer เหลือ';
+    } else if (heavyFps >= 12) {
+      tier = 'MODEST';
+      verdictClass = 'v-warn';
+      verdictText = 'เครื่องนี้พอไหว แต่ไม่มี buffer — ควรลดเงาและความละเอียดลงเป็นค่าเริ่มต้น';
+    } else {
+      tier = 'SLOW';
+      verdictClass = 'v-warn';
+      verdictText = 'เครื่องนี้ช้าสำหรับ 3 มิติ — ควรตั้งค่าเริ่มต้นเป็นชั้นวางแบบแบน แล้วให้เปิด 3 มิติเองถ้าต้องการ';
+    }
+
+    var screenPixels = (window.screen.width * window.devicePixelRatio) + '×' + (window.screen.height * window.devicePixelRatio);
+    var mem = navigator.deviceMemory ? navigator.deviceMemory + ' GB (โดยประมาณ)' : 'เบราว์เซอร์ไม่บอก';
+    var cores = navigator.hardwareConcurrency || 'ไม่ทราบ';
+    var reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'เปิดอยู่ (ระบบสั่งลดการเคลื่อนไหว)' : 'ปิด';
+
+    var html = '<div class="verdict ' + verdictClass + '">' + verdictText + '</div><div class="card"><table>';
+    html += row('ระดับที่ประเมินได้', tier);
+    html += row('การ์ดจอที่เบราว์เซอร์ใช้', gpu.renderer);
+    html += row('ผู้ผลิต', gpu.vendor);
+    html += row('ใช้การ์ดจอจริงหรือไม่', gpu.software ? '<b>ไม่ — rendering ด้วย CPU</b>' : 'ใช่');
+    html += row('WebGL 2', gpu.webgl2 ? 'ได้' : 'ไม่ได้ (ใช้ WebGL 1)');
+    html += row('เบราว์เซอร์', browserName());
+    html += row('หน้าจอ', screenPixels + '  (scaling ' + window.devicePixelRatio + '×)');
+    html += row('หน่วยความจำ', mem);
+    html += row('CPU threads', cores);
+    html += row('ภาระเบา — เฟรมกลาง', bench.light ? bench.light.median.toFixed(1) + ' ms (' + lightFps.toFixed(0) + ' fps)' : 'วัดไม่ได้');
+    html += row('ภาระหนัก — เฟรมกลาง', bench.heavy ? bench.heavy.median.toFixed(1) + ' ms (' + heavyFps.toFixed(0) + ' fps)' : 'วัดไม่ได้');
+    html += row('ภาระหนัก — p95', bench.heavy ? bench.heavy.p95.toFixed(1) + ' ms' : '—');
+    html += row('ลดการเคลื่อนไหวใน Windows', reduced);
+    html += '</table></div>';
+    out.innerHTML = html;
+
+    var lines = [
+      'ANF3 PC CHECK',
+      'tier          : ' + tier,
+      'gpu           : ' + gpu.renderer,
+      'vendor        : ' + gpu.vendor,
+      'software rend : ' + (gpu.software ? 'YES (hardware acceleration off)' : 'no'),
+      'webgl2        : ' + (gpu.webgl2 ? 'yes' : 'no'),
+      'max texture   : ' + gpu.maxTexture,
+      'browser       : ' + browserName(),
+      'screen        : ' + screenPixels + ' @dpr ' + window.devicePixelRatio,
+      'memory        : ' + mem,
+      'cores         : ' + cores,
+      'bench light   : ' + (bench.light ? bench.light.median.toFixed(2) + ' ms / ' + lightFps.toFixed(1) + ' fps' : 'n/a'),
+      'bench heavy   : ' + (bench.heavy ? bench.heavy.median.toFixed(2) + ' ms / ' + heavyFps.toFixed(1) + ' fps' : 'n/a'),
+      'heavy p95     : ' + (bench.heavy ? bench.heavy.p95.toFixed(2) + ' ms' : 'n/a'),
+      'reduced motion: ' + reduced,
+      'ua            : ' + navigator.userAgent,
+      'checked at    : ' + new Date().toISOString()
+    ];
+    reportBox.value = lines.join('\n');
+    copybox.hidden = false;
+    statusLine.textContent = 'ตรวจเสร็จแล้ว คัดลอกข้อความในกล่องล่างสุดส่งกลับมาได้เลย';
+    go.disabled = false;
+    go.textContent = 'ตรวจอีกครั้ง';
+  }
+})();
+</script>
+</body>
+</html>

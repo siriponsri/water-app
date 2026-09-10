@@ -1,0 +1,1477 @@
+"""
+============================================
+PDF Server - Water Record System
+============================================
+Local server สำหรับสร้าง Word และแปลง PDF
+ต้องติดตั้ง: pip install flask flask-cors pywin32
+รองรับ: Microsoft Office (แนะนำ) หรือ LibreOffice
+Version: 4.2.0 - Multi-folder support + Static Files
+============================================
+"""
+
+from flask import Flask, request, jsonify, send_file, send_from_directory, redirect, Response
+import subprocess  # nosec - Used for controlled LibreOffice conversion
+import sys
+import os
+import shutil
+import json
+import re
+import zipfile
+import tempfile
+import hashlib
+import socket
+import threading
+
+from datetime import datetime
+
+import activity_log
+from pathlib import Path
+
+app = Flask(__name__, static_folder=None)
+app.config['MAX_CONTENT_LENGTH'] = 2 * 1024 * 1024
+
+# ============================================
+# Configuration
+# ============================================
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DIST_DIR = os.path.join(BASE_DIR, 'dist')
+INVENTORY_PDF = os.path.join(BASE_DIR, 'inventory_catalog.pdf')
+INVENTORY_INDEX_HASH = 'F6DDDE2826C1DE34873FCCAB883F075788022C42565DBBC6D80E7F1EAA5BC71C'
+INVENTORY_INDEX_PATHS = (
+    os.path.join(DIST_DIR, 'catalog', 'inventory-index.json'),
+    os.path.join(BASE_DIR, 'apps', 'web', 'public', 'catalog', 'inventory-index.json')
+)
+WORDS_DIR = os.path.join(BASE_DIR, 'words')
+PDFS_DIR = os.path.join(BASE_DIR, 'pdfs')
+TEMPLATE_DIR = os.path.join(BASE_DIR, 'templates')
+
+PDF_WORKFLOW_REGISTRY = {
+    'pw-prw': {
+        'template': 'pw-prw-template.docx',
+        'owner': 'water',
+        'family': 'water-pw-prw'
+    },
+    'wfi-pus': {
+        'template': 'wfi-pus-template.docx',
+        'owner': 'water',
+        'family': 'water-wfi-pus'
+    },
+    'compressed-air': {
+        'template': 'ca-template.docx',
+        'owner': 'air',
+        'family': 'air-compressed'
+    },
+    'em-air': {
+        'template': 'em-template.docx',
+        'owner': 'air',
+        'family': 'air-environmental'
+    },
+    # The owner approved the existing Water document families for CV Rinse.
+    # They remain separate CV routes/adapters so a CV request cannot become a
+    # Water request by submitting a filename.
+    'cleaning-validation-contact': {
+        'template': 'cv-contact-template.docx',
+        'owner': 'cv',
+        'family': 'cv-contact'
+    },
+    'cleaning-validation-rinse-pour': {
+        'template': 'pw-prw-template.docx',
+        'owner': 'cv',
+        'family': 'cv-rinse-pour',
+        'sourceWorkflow': 'pw-prw',
+        'testMethod': 'pour-plate'
+    },
+    'cleaning-validation-rinse-membrane': {
+        'template': 'wfi-pus-template.docx',
+        'owner': 'cv',
+        'family': 'cv-rinse-membrane',
+        'sourceWorkflow': 'wfi-pus',
+        'testMethod': 'membrane-filtration'
+    }
+}
+WORKFLOW_TEMPLATES = {key: value['template'] for key, value in PDF_WORKFLOW_REGISTRY.items()}
+LEGACY_PAGE_FOLDERS = ('pw-prw', 'wfi-pus', 'compressed-air', 'em-air', 'cv')
+PDF_ID_RE = re.compile(r'^[0-9a-f]{64}$')
+SAFE_KEY_RE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._ -]{0,119}$')
+WINDOWS_DEVICE_NAMES = {
+    'CON', 'PRN', 'AUX', 'NUL',
+    *(f'COM{number}' for number in range(1, 10)),
+    *(f'LPT{number}' for number in range(1, 10))
+}
+CONVERSION_LOCK = threading.Lock()
+
+# Form type folders
+FORM_FOLDERS = [
+    'pw-prw',
+    'wfi-pus',
+    'compressed-air',
+    'em-air',
+    'cleaning-validation',
+    'cleaning-validation-contact',
+    'cleaning-validation-rinse-pour',
+    'cleaning-validation-rinse-membrane',
+    'growth-promotion',
+    'identification'
+]
+
+# Create folder structure
+def create_folder_structure():
+    """Create all necessary folders for the application"""
+    os.makedirs(WORDS_DIR, exist_ok=True)
+    os.makedirs(PDFS_DIR, exist_ok=True)
+    os.makedirs(TEMPLATE_DIR, exist_ok=True)
+    
+    for folder in FORM_FOLDERS:
+        os.makedirs(os.path.join(WORDS_DIR, folder), exist_ok=True)
+        os.makedirs(os.path.join(PDFS_DIR, folder), exist_ok=True)
+    
+    print("[OK] Folder structure created")
+
+# Initialize folders on startup
+create_folder_structure()
+
+# ============================================
+# Office Detection
+# ============================================
+MS_OFFICE_AVAILABLE = False
+LIBREOFFICE_PATH = None
+
+def find_msoffice():
+    """ตรวจหา Microsoft Word (ไม่เปิด instance จริง — ตรวจจาก registry)"""
+    try:
+        import winreg
+        winreg.OpenKey(winreg.HKEY_CLASSES_ROOT, 'Word.Application')
+        return True
+    except Exception:
+        pass
+    try:
+        import win32com.client  # noqa
+        return True
+    except ImportError:
+        return False
+
+def find_libreoffice():
+    """ตรวจหา LibreOffice"""
+    possible_paths = [
+        r"C:\Program Files\LibreOffice\program\soffice.exe",
+        r"C:\Program Files (x86)\LibreOffice\program\soffice.exe",
+        "/usr/bin/libreoffice",
+        "/usr/bin/soffice",
+        "/Applications/LibreOffice.app/Contents/MacOS/soffice"
+    ]
+    
+    for path in possible_paths:
+        if os.path.exists(path):
+            return path
+    
+    # Try finding in PATH
+    try:
+        result = subprocess.run(['which', 'libreoffice'], capture_output=True, text=True)  # nosec
+        if result.returncode == 0:
+            return result.stdout.strip()
+    except:
+        pass
+    
+    return None
+
+# Check available converters
+MS_OFFICE_AVAILABLE = find_msoffice()
+LIBREOFFICE_PATH = find_libreoffice()
+
+# ============================================
+# PDF Conversion Functions
+# ============================================
+
+def convert_with_word(word_path, pdf_path):
+    """แปลง Word เป็น PDF ผ่าน PowerShell .ps1 temp file (quote-safe)"""
+    word_path = os.path.abspath(word_path)
+    pdf_path  = os.path.abspath(pdf_path)
+    os.makedirs(os.path.dirname(pdf_path), exist_ok=True)
+
+    # Clean stale Word lock files in same folder
+    folder = os.path.dirname(word_path)
+    for f in os.listdir(folder):
+        if f.startswith('~$'):
+            try: os.remove(os.path.join(folder, f))
+            except: pass
+
+    pid_file = word_path + '.word.pid'
+    ps_content = f"""$ErrorActionPreference = 'Stop'
+Add-Type @'
+using System;
+using System.Runtime.InteropServices;
+public static class Win32Pid {{
+  [DllImport("user32.dll")]
+  public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
+}}
+'@
+$word = New-Object -ComObject Word.Application
+$word.Visible = $false
+$word.DisplayAlerts = 0
+try {{
+    $wordProcessId = 0
+    [Win32Pid]::GetWindowThreadProcessId([IntPtr]$word.Hwnd, [ref]$wordProcessId) | Out-Null
+    [IO.File]::WriteAllText("{pid_file}", [string]$wordProcessId)
+    $doc = $word.Documents.Open("{word_path}", $false, $true, $false)
+    $doc.SaveAs([ref]"{pdf_path}", [ref]17)
+    $doc.Close([ref]$false)
+}} finally {{
+    $word.Quit()
+    [System.Runtime.InteropServices.Marshal]::ReleaseComObject($word) | Out-Null
+}}
+"""
+    ps_file = word_path + '.tmp.ps1'
+    try:
+        with open(ps_file, 'w', encoding='utf-8') as f:
+            f.write(ps_content)
+
+        result = subprocess.run(  # nosec
+            ['powershell', '-ExecutionPolicy', 'Bypass', '-NonInteractive', '-NoProfile', '-File', ps_file],
+            timeout=60,
+            capture_output=True,
+            text=True
+        )
+        if result.returncode != 0:
+            err = (result.stderr or result.stdout or 'Word conversion failed').strip()
+            print(f"[Word PS error] {err}")
+            return False, err
+        if not os.path.exists(pdf_path):
+            return False, "PDF not created"
+        return True, None
+    except subprocess.TimeoutExpired:
+        try:
+            with open(pid_file, 'r', encoding='ascii') as f:
+                word_pid = int(f.read().strip())
+            subprocess.run(
+                ['powershell', '-NoProfile', '-NonInteractive', '-Command',
+                 (f'Get-Process -Id {word_pid} -ErrorAction SilentlyContinue | '
+                  "Where-Object { $_.ProcessName -eq 'WINWORD' } | "
+                  'Stop-Process -Force -ErrorAction SilentlyContinue')],
+                capture_output=True,
+                timeout=10
+            )  # nosec - PID belongs to the Word instance started above
+        except (OSError, ValueError, subprocess.SubprocessError):
+            pass
+        return False, "Word conversion timeout (60s)"
+    except Exception as e:
+        return False, str(e)
+    finally:
+        try: os.remove(ps_file)
+        except: pass
+        try: os.remove(pid_file)
+        except: pass
+
+def convert_with_libreoffice(word_path, output_dir, libreoffice_path=None):
+    """แปลง Word เป็น PDF ด้วย LibreOffice"""
+    try:
+        if not libreoffice_path:
+            libreoffice_path = LIBREOFFICE_PATH
+        
+        if not libreoffice_path:
+            return False, "LibreOffice not found"
+        
+        # Ensure paths are absolute
+        word_path = os.path.abspath(word_path)
+        output_dir = os.path.abspath(output_dir)
+        
+        # Ensure output directory exists
+        os.makedirs(output_dir, exist_ok=True)
+        
+        cmd = [
+            libreoffice_path,
+            '--headless',
+            '--convert-to', 'pdf',
+            '--outdir', output_dir,
+            word_path
+        ]
+        
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)  # nosec
+        
+        if result.returncode != 0:
+            return False, result.stderr
+        
+        return True, None
+    except subprocess.TimeoutExpired:
+        return False, "Conversion timeout"
+    except Exception as e:
+        return False, str(e)
+
+def convert_to_pdf(word_path, pdf_path):
+    """แปลง Word เป็น PDF โดยเลือก converter ที่เหมาะสม
+    Includes auto-retry with re-detection for cross-machine usage."""
+    with CONVERSION_LOCK:
+        return _convert_to_pdf_locked(word_path, pdf_path)
+
+
+def _convert_to_pdf_locked(word_path, pdf_path):
+    """Run one conversion at a time because local Office automation is not re-entrant."""
+    global MS_OFFICE_AVAILABLE, LIBREOFFICE_PATH
+
+    # ---- Attempt 1: Try with cached detection ---------------------------
+    success, converter, error = _try_convert(word_path, pdf_path)
+    if success:
+        return True, converter, None
+
+    # ---- Attempt 2: Re-detect converters (handles new installs / mapped drives)
+    print("[INFO] First attempt failed — re-detecting PDF converters...")
+    MS_OFFICE_AVAILABLE = find_msoffice()
+    LIBREOFFICE_PATH = find_libreoffice()
+
+    success, converter, error = _try_convert(word_path, pdf_path)
+    if success:
+        return True, converter, None
+
+    # ---- All attempts failed ---------------------------------------------
+    hint = (
+        "No PDF converter available on this machine. "
+        "Install Microsoft Office (+ run INSTALL-MSOFFICE-SUPPORT.bat) "
+        "or LibreOffice, then restart the server."
+    )
+    print(f"[ERROR] {hint}")
+    return False, None, hint
+
+
+def _try_convert(word_path, pdf_path):
+    """Internal helper: single conversion attempt using available converters."""
+    # Try MS Office first
+    if MS_OFFICE_AVAILABLE:
+        success, error = convert_with_word(word_path, pdf_path)
+        if success:
+            return True, 'MS Office', None
+        print(f"[WARNING] MS Office conversion failed: {error}")
+
+    # Try LibreOffice
+    if LIBREOFFICE_PATH:
+        output_dir = os.path.dirname(pdf_path)
+        success, error = convert_with_libreoffice(word_path, output_dir)
+        if success:
+            source_name = os.path.splitext(os.path.basename(word_path))[0]
+            expected_pdf = os.path.join(output_dir, f"{source_name}.pdf")
+
+            if expected_pdf != pdf_path and os.path.exists(expected_pdf):
+                shutil.move(expected_pdf, pdf_path)
+
+            return True, 'LibreOffice', None
+        print(f"[WARNING] LibreOffice conversion failed: {error}")
+
+    return False, None, "No PDF converter available"
+
+# ============================================
+# XML Sanitization
+# ============================================
+
+def sanitize_for_xml(value):
+    """Sanitize string for safe XML use"""
+    if value is None:
+        return ''
+    
+    value = str(value)
+    
+    # Remove invalid XML characters
+    def is_valid_xml_char(c):
+        codepoint = ord(c)
+        return (
+            codepoint == 0x9 or
+            codepoint == 0xA or
+            codepoint == 0xD or
+            (0x20 <= codepoint <= 0xD7FF) or
+            (0xE000 <= codepoint <= 0xFFFD) or
+            (0x10000 <= codepoint <= 0x10FFFF)
+        )
+    
+    value = ''.join(c for c in value if is_valid_xml_char(c))
+    
+    # Escape XML special characters (order matters: & first)
+    value = value.replace('&', '&amp;')
+    value = value.replace('<', '&lt;')
+    value = value.replace('>', '&gt;')
+    value = value.replace('"', '&quot;')
+    value = value.replace("'", '&apos;')
+    
+    return value
+
+def sanitize_data_for_xml(data):
+    """Sanitize all values in dictionary for XML use"""
+    sanitized = {}
+    for key, value in data.items():
+        if isinstance(value, str):
+            sanitized[key] = sanitize_for_xml(value)
+        elif isinstance(value, (int, float)):
+            sanitized[key] = str(value)
+        elif value is None:
+            sanitized[key] = ''
+        else:
+            sanitized[key] = sanitize_for_xml(str(value))
+    return sanitized
+
+# ============================================
+# Template Processing
+# ============================================
+
+def _apply_replacements(content, data):
+    """Apply placeholder replacements to XML content string. Returns modified content."""
+    replaced_count = 0
+
+    def process_section(match, tag_format):
+        nonlocal replaced_count
+        section = match.group(0)
+        t_pattern = r'(<w:t[^>]*>)([^<]*)(</w:t>)'
+        t_matches = list(re.finditer(t_pattern, section))
+        if not t_matches:
+            return section
+        full_text = ''.join(m.group(2) for m in t_matches)
+        full_text = re.sub(r'&lt;\s+', '&lt;', full_text)
+        full_text = re.sub(r'\s+&gt;', '&gt;', full_text)
+        original = full_text
+        for key, value in data.items():
+            pattern = tag_format.format(key)
+            if pattern in full_text:
+                full_text = full_text.replace(pattern, str(value) if value else '')
+                replaced_count += 1
+        if full_text == original:
+            return section
+        first_done = [False]
+        def replacer(m):
+            if not first_done[0]:
+                first_done[0] = True
+                return m.group(1) + full_text + m.group(3)
+            return m.group(1) + m.group(3)
+        return re.sub(t_pattern, replacer, section)
+
+    content = re.sub(r'<w:txbxContent>.*?</w:txbxContent>',
+                     lambda m: process_section(m, '&lt;{}&gt;'), content, flags=re.DOTALL)
+    content = re.sub(r'<w:p\b[^>]*>.*?</w:p>',
+                     lambda m: process_section(m, '<{}>'), content, flags=re.DOTALL)
+    return content, replaced_count
+
+
+def _make_ids_unique(xml_fragment, page_idx):
+    """Rename anchor/para IDs to avoid duplicates when appending pages."""
+    suffix = f'{page_idx:04X}'
+    # w:rsidR, w:rsidRDefault, w14:paraId, w14:textId, wp14:anchorId, wp14:editId
+    def sub_hex(m):
+        return m.group(1) + f'{int(m.group(2), 16) ^ (page_idx * 0x1000):08X}' + m.group(3)
+    xml_fragment = re.sub(r'(w14:paraId=")([0-9A-Fa-f]{8})(")', sub_hex, xml_fragment)
+    xml_fragment = re.sub(r'(w14:textId=")([0-9A-Fa-f]{8})(")', sub_hex, xml_fragment)
+    xml_fragment = re.sub(r'(wp14:anchorId=")([0-9A-Fa-f]{8})(")', sub_hex, xml_fragment)
+    xml_fragment = re.sub(r'(wp14:editId=")([0-9A-Fa-f]{8})(")', sub_hex, xml_fragment)
+    return xml_fragment
+
+
+def build_multipage_docx(template_path, output_path, pages_data):
+    """Build a single DOCX with multiple pages by repeating the template body.
+
+    pages_data: list of dicts, one per page (already sanitized).
+    Each page's body is appended after a continuous section break from the previous page.
+    """
+    temp_dir = tempfile.mkdtemp()
+    try:
+        with zipfile.ZipFile(template_path, 'r') as z:
+            z.extractall(temp_dir)
+
+        doc_path = os.path.join(temp_dir, 'word', 'document.xml')
+        with open(doc_path, 'r', encoding='utf-8') as f:
+            original_xml = f.read()
+
+        body_open = original_xml.find('<w:body>') + len('<w:body>')
+        sectPr_start = original_xml.rfind('<w:sectPr')
+        body_end = original_xml.find('</w:body>')
+
+        template_body = original_xml[body_open:sectPr_start]   # body content (no sectPr)
+        final_sectPr  = original_xml[sectPr_start:body_end]    # last sectPr (keeps page size)
+        xml_before    = original_xml[:body_open]
+        xml_after     = original_xml[body_end:]
+
+        # Section break paragraph inserted between pages (continuous type forces new page in floating layout)
+        page_break_para = '<w:p><w:pPr><w:sectPr><w:type w:val="nextPage"/>' + \
+                          final_sectPr[final_sectPr.find('>') + 1:] + \
+                          '</w:sectPr></w:pPr></w:p>'
+
+        assembled_parts = []
+        for i, page_data in enumerate(pages_data):
+            page_xml = _make_ids_unique(template_body, i)
+            page_xml, cnt = _apply_replacements(page_xml, page_data)
+            print(f"[DEBUG] page {i+1}: {cnt} replacements")
+            if i > 0:
+                assembled_parts.append(page_break_para)
+            assembled_parts.append(page_xml)
+
+        new_xml = xml_before + ''.join(assembled_parts) + final_sectPr + xml_after
+
+        os.makedirs(os.path.dirname(output_path), exist_ok=True)
+        with open(doc_path, 'w', encoding='utf-8') as f:
+            f.write(new_xml)
+
+        with zipfile.ZipFile(output_path, 'w', zipfile.ZIP_DEFLATED) as zout:
+            for root, dirs, files in os.walk(temp_dir):
+                for fname in files:
+                    fp = os.path.join(root, fname)
+                    zout.write(fp, os.path.relpath(fp, temp_dir))
+
+        return len(pages_data)
+
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def replace_placeholders_in_file(template_path, output_path, data):
+    """Replace placeholders in Word document by manipulating XML"""
+    
+    # Sanitize data first
+    data = sanitize_data_for_xml(data)
+    
+    print(f"[DEBUG] Starting replacement with {len(data)} keys")
+    
+    temp_dir = tempfile.mkdtemp()
+    
+    try:
+        # Extract docx
+        with zipfile.ZipFile(template_path, 'r') as zip_ref:
+            zip_ref.extractall(temp_dir)
+        
+        # Read document.xml
+        doc_xml_path = os.path.join(temp_dir, 'word', 'document.xml')
+        with open(doc_xml_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+        
+        replaced_count = 0
+        
+        def process_section(match, tag_format):
+            nonlocal replaced_count
+            section = match.group(0)
+            
+            t_pattern = r'(<w:t[^>]*>)([^<]*)(</w:t>)'
+            t_matches = list(re.finditer(t_pattern, section))
+            
+            if not t_matches:
+                return section
+            
+            # Combine all text
+            full_text = ''.join(m.group(2) for m in t_matches)
+            
+            # Normalize spaces inside tag brackets (handles "< tag >" → "<tag>")
+            full_text = re.sub(r'&lt;\s+', '&lt;', full_text)
+            full_text = re.sub(r'\s+&gt;', '&gt;', full_text)
+            
+            original = full_text
+            
+            # Replace tags - empty tags get cleared completely
+            for key, value in data.items():
+                replacement = str(value) if value else ''  # Empty value = clear tag
+                pattern = tag_format.format(key)
+                if pattern in full_text:
+                    full_text = full_text.replace(pattern, replacement)
+                    replaced_count += 1
+            
+            if full_text == original:
+                return section
+            
+            # Put all text in first w:t, empty others
+            first_done = [False]
+            def replacer(m):
+                if not first_done[0]:
+                    first_done[0] = True
+                    return m.group(1) + full_text + m.group(3)
+                else:
+                    return m.group(1) + m.group(3)
+            
+            return re.sub(t_pattern, replacer, section)
+        
+        # Process text boxes
+        content = re.sub(
+            r'<w:txbxContent>.*?</w:txbxContent>',
+            lambda m: process_section(m, '&lt;{}&gt;'),
+            content,
+            flags=re.DOTALL
+        )
+        
+        # Process paragraphs
+        content = re.sub(
+            r'<w:p\b[^>]*>.*?</w:p>',
+            lambda m: process_section(m, '<{}>'),
+            content,
+            flags=re.DOTALL
+        )
+        
+        print(f"[DEBUG] Total replacements: {replaced_count}")
+        
+        # Ensure output directory exists
+        os.makedirs(os.path.dirname(output_path), exist_ok=True)
+        
+        # Write back
+        with open(doc_xml_path, 'w', encoding='utf-8') as f:
+            f.write(content)
+        
+        # Re-zip
+        with zipfile.ZipFile(output_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+            for root, dirs, files in os.walk(temp_dir):
+                for file in files:
+                    file_path = os.path.join(root, file)
+                    arcname = os.path.relpath(file_path, temp_dir)
+                    zipf.write(file_path, arcname)
+        
+        return replaced_count
+        
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+# ============================================
+# Helper Functions
+# ============================================
+
+def get_form_folder(template_name):
+    """Get folder name from template name"""
+    if 'pw-prw' in template_name.lower():
+        return 'pw-prw'
+    elif 'wfi-pus' in template_name.lower():
+        return 'wfi-pus'
+    elif 'compressed-air' in template_name.lower() or template_name.lower().startswith('ca-'):
+        return 'compressed-air'
+    elif 'em-air' in template_name.lower() or template_name.lower().startswith('em-'):
+        return 'em-air'
+    elif 'cleaning' in template_name.lower() or template_name.lower().startswith('cv-'):
+        return 'cleaning-validation'
+    elif 'growth' in template_name.lower():
+        return 'growth-promotion'
+    elif 'identification' in template_name.lower() or 'id-' in template_name.lower():
+        return 'identification'
+    else:
+        return 'other'
+
+# ============================================
+# Static Files & Routes
+# ============================================
+
+
+# --- choosing a port --------------------------------------------------------
+# A laboratory PC often has something else on 8000 already. Failing with
+# "Address already in use" and closing the window told the user nothing they
+# could act on, so the server now takes the next free port and records it. The
+# browser reaches the API on relative paths, so nothing in the app cares which
+# port it ended up on; only the launcher needs to know, and it reads the file
+# written below.
+PORT_FILE = os.path.join(BASE_DIR, '.anf3-port')
+
+
+def _port_is_free(host, port):
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            probe.bind((host, port))
+            return True
+        except OSError:
+            return False
+
+
+def _pick_free_port(host, preferred, span=40):
+    """The preferred port if it is free, else the next free one above it."""
+    if _port_is_free(host, preferred):
+        return preferred
+    for candidate in range(preferred + 1, preferred + span):
+        if _port_is_free(host, candidate):
+            return candidate
+    # Nothing in the range: let the OS choose rather than refuse to start.
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        probe.bind((host, 0))
+        return probe.getsockname()[1]
+
+
+def _write_port_file(port):
+    try:
+        with open(PORT_FILE, 'w', encoding='utf-8') as handle:
+            handle.write(str(port))
+    except OSError:
+        pass  # a read-only folder must not stop the server starting
+
+
+def _clear_port_file():
+    try:
+        os.remove(PORT_FILE)
+    except OSError:
+        pass
+
+
+@app.route('/')
+def index():
+    """Serve only the built application shell."""
+    dist_index = os.path.join(DIST_DIR, 'index.html')
+    if _is_file_within(dist_index, DIST_DIR):
+        return send_file(dist_index, mimetype='text/html')
+    return jsonify({'error': 'Frontend build not found'}), 404
+
+
+def _is_file_within(path, root):
+    """Accept regular files only when their resolved target remains under root."""
+    try:
+        resolved_path = os.path.realpath(path)
+        resolved_root = os.path.realpath(root)
+        return (os.path.commonpath([resolved_root, resolved_path]) == resolved_root and
+                os.path.isfile(resolved_path))
+    except ValueError:
+        return False
+
+@app.route('/<path:filename>')
+def serve_static(filename):
+    """Serve static files from BASE_DIR"""
+    normalized = filename.replace('\\', '/')
+    legacy_html = any(
+        normalized == f'{folder}/{page}.html'
+        for folder in LEGACY_PAGE_FOLDERS
+        for page in ('list', 'menu', 'print')
+    )
+    shared_asset = (
+        (normalized.startswith('js/') and normalized.endswith('.js')) or
+        normalized == 'css/style.css'
+    )
+    dist_candidate = os.path.abspath(os.path.join(DIST_DIR, normalized))
+    dist_asset = _is_file_within(dist_candidate, DIST_DIR)
+    inventory_pdf = normalized == 'inventory_catalog.pdf'
+    inventory_index = normalized == 'catalog/inventory-index.json'
+    # Runtime configuration lives beside the launchers, NOT inside dist/:
+    # `pnpm build` empties dist/, so a copy in there would be silently reset on
+    # every rebuild and the owner would lose the URLs they pasted in. It holds
+    # public read endpoints only -- never ANF3_SYNC_TOKEN.
+    runtime_config = normalized == 'config.json'
+    if '..' in normalized.split('/') or not (legacy_html or shared_asset or dist_asset
+                                             or inventory_pdf or inventory_index or runtime_config):
+        return jsonify({'error': 'Not found'}), 404
+    
+    # Vite emits the React shell into dist/. Keep legacy files at the project
+    # root so existing form/list/print links remain stable.
+    dist_path = os.path.join(DIST_DIR, filename)
+    file_path = dist_path if os.path.isfile(dist_path) else os.path.join(BASE_DIR, filename)
+    if runtime_config:
+        file_path = os.path.join(BASE_DIR, 'config.json')
+    if inventory_pdf:
+        file_path = INVENTORY_PDF
+    elif inventory_index:
+        file_path = next((path for path in INVENTORY_INDEX_PATHS if os.path.isfile(path)), '')
+
+    if filename == 'index.html' and os.path.isfile(os.path.join(DIST_DIR, 'index.html')):
+        file_path = os.path.join(DIST_DIR, 'index.html')
+    
+    # If it's a directory, try to serve index.html
+    if os.path.isdir(file_path):
+        index_path = os.path.join(file_path, 'index.html')
+        if os.path.isfile(index_path):
+            return send_file(index_path, mimetype='text/html')
+        return jsonify({'error': 'Directory listing not allowed'}), 403
+    
+    if _is_file_within(file_path, BASE_DIR):
+        # Determine MIME type
+        if filename.endswith('.html'):
+            mimetype = 'text/html'
+        elif filename.endswith('.css'):
+            mimetype = 'text/css'
+        elif filename.endswith('.js') or filename.endswith('.mjs'):
+            # .mjs matters: a browser applies strict MIME checking to module
+            # scripts and refuses one served as application/octet-stream, which
+            # is what Flask guesses for an unknown extension. The pdf.js worker
+            # ships as .mjs, so without this the print preview cannot draw a
+            # single page -- it fails with "Expected a JavaScript-or-Wasm
+            # module script" and silently falls back to a fake worker.
+            mimetype = 'text/javascript'
+        elif filename.endswith('.json'):
+            mimetype = 'application/json'
+        elif filename.endswith('.png'):
+            mimetype = 'image/png'
+        elif filename.endswith('.jpg') or filename.endswith('.jpeg'):
+            mimetype = 'image/jpeg'
+        elif filename.endswith('.svg'):
+            mimetype = 'image/svg+xml'
+        elif filename.endswith('.woff') or filename.endswith('.woff2'):
+            mimetype = 'font/woff2'
+        elif filename.endswith('.docx'):
+            mimetype = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+        elif filename.endswith('.pdf'):
+            mimetype = 'application/pdf'
+        else:
+            mimetype = 'application/octet-stream'
+        
+        return send_file(file_path, mimetype=mimetype)
+    
+    return jsonify({'error': 'File not found'}), 404
+
+
+def _json_error(message, status_code):
+    return jsonify({'error': message}), status_code
+
+
+def _workflow_config(payload):
+    workflow = payload.get('workflow') or payload.get('formType')
+    if not isinstance(workflow, str) or workflow not in PDF_WORKFLOW_REGISTRY:
+        raise ValueError('Unsupported workflow')
+    return workflow, PDF_WORKFLOW_REGISTRY[workflow]['template']
+
+
+def _normalize_cv_token(value):
+    return re.sub(r'[\s_.-]+', '', str(value or '').strip().upper())
+
+
+def _cv_sampling_family(payload, document_data):
+    context = payload.get('cvContext') if isinstance(payload.get('cvContext'), dict) else {}
+    raw = (context.get('samplingFamily') or context.get('sampleMatrix') or
+           document_data.get('samplingFamily') or document_data.get('sampleMatrix') or
+           document_data.get('sampleType') or document_data.get('cvType'))
+    token = _normalize_cv_token(raw)
+    if 'CONTACTPLATE' in token or token == 'CONTACT':
+        return 'contact-plate'
+    if 'RINSE' in token:
+        return 'rinse'
+    return 'unknown'
+
+
+def _cv_test_method(payload, document_data):
+    context = payload.get('cvContext') if isinstance(payload.get('cvContext'), dict) else {}
+    raw = (context.get('testMethod') or context.get('method') or
+           document_data.get('testMethod') or document_data.get('method'))
+    token = _normalize_cv_token(raw)
+    if 'POURPLATE' in token or token == 'POUR':
+        return 'pour-plate'
+    if ('MEMBRANEFILTRATION' in token or token == 'MEMBRANE' or
+            token == 'MEMBFILTRATION'):
+        return 'membrane-filtration'
+    return 'unknown'
+
+
+def _validate_pdf_route(workflow, payload, document_data):
+    """Validate the controlled CV route independently of the browser."""
+    if not workflow.startswith('cleaning-validation-'):
+        return
+    family = _cv_sampling_family(payload, document_data)
+    method = _cv_test_method(payload, document_data)
+    if family == 'unknown':
+        raise ValueError('CV sampling family is required')
+    if workflow == 'cleaning-validation-contact':
+        if family != 'contact-plate':
+            raise ValueError('Contact route accepts Contact Plate records only')
+        return
+    if family != 'rinse':
+        raise ValueError('CV Rinse routes accept Rinse records only')
+    expected_method = PDF_WORKFLOW_REGISTRY[workflow].get('testMethod')
+    if method == 'unknown' or method != expected_method:
+        raise ValueError('CV Rinse test method does not match the selected route')
+
+
+def _hash_file(path):
+    digest = hashlib.sha256()
+    with open(path, 'rb') as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b''):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _pdf_paths(workflow, pdf_id):
+    if not PDF_ID_RE.fullmatch(pdf_id or ''):
+        return None, None
+    folder = os.path.join(PDFS_DIR, workflow)
+    return os.path.join(folder, f'{pdf_id}.pdf'), os.path.join(folder, f'{pdf_id}.json')
+
+
+def _safe_pdf_filename(value):
+    if not isinstance(value, str) or value != os.path.basename(value):
+        return None
+    if not value.lower().endswith('.pdf') or value.endswith((' ', '.')):
+        return None
+    stem = value[:-4].rstrip(' .')
+    if not stem or stem != value[:-4] or stem.upper() in WINDOWS_DEVICE_NAMES:
+        return None
+    return value
+
+
+def _load_pdf_metadata(pdf_id):
+    for workflow in WORKFLOW_TEMPLATES:
+        pdf_path, metadata_path = _pdf_paths(workflow, pdf_id)
+        workflow_root = os.path.join(PDFS_DIR, workflow)
+        if (_is_file_within(pdf_path, workflow_root) and
+                _is_file_within(metadata_path, workflow_root)):
+            try:
+                with open(metadata_path, 'r', encoding='utf-8') as source:
+                    metadata = json.load(source)
+                if not isinstance(metadata, dict):
+                    return None, None
+                if (metadata.get('pdfId') != pdf_id or
+                        metadata.get('workflow') != workflow or
+                        metadata.get('status') != 'ready' or
+                        not _safe_pdf_filename(metadata.get('filename'))):
+                    return None, None
+                return metadata, pdf_path
+            except (OSError, ValueError):
+                return None, None
+    return None, None
+
+
+@app.errorhandler(413)
+def request_too_large(_error):
+    return _json_error('Request body exceeds the 2 MB limit', 413)
+
+
+@app.route('/api/catalog/status', methods=['GET'])
+def catalog_status():
+    available = os.path.isfile(INVENTORY_PDF)
+    actual_hash = _hash_file(INVENTORY_PDF).upper() if available else None
+    manifest_path = next((path for path in INVENTORY_INDEX_PATHS if os.path.isfile(path)), '')
+    row_count = 0
+    index_hash = None
+    if os.path.isfile(manifest_path):
+        try:
+            with open(manifest_path, 'r', encoding='utf-8') as source:
+                manifest = json.load(source)
+            index_hash = str(manifest.get('sourceSha256') or manifest.get('source', {}).get('sha256') or '').upper()
+            rows = manifest.get('items') or manifest.get('rows') or []
+            row_count = len(rows) if isinstance(rows, list) else 0
+        except (OSError, ValueError, AttributeError):
+            index_hash = None
+    hash_matches = bool(available and actual_hash == INVENTORY_INDEX_HASH and index_hash == INVENTORY_INDEX_HASH)
+    return jsonify({
+        'available': available,
+        'indexAvailable': hash_matches and row_count == 95,
+        'hashMatches': hash_matches,
+        'expectedHash': INVENTORY_INDEX_HASH,
+        'actualHash': actual_hash,
+        'rowCount': row_count,
+        'pdfUrl': '/inventory_catalog.pdf',
+        'indexUrl': '/catalog/inventory-index.json'
+    })
+
+
+@app.route('/api/pdf-capabilities', methods=['GET'])
+def pdf_capabilities():
+    """Expose safe, server-owned template capability metadata to the UI."""
+    capabilities = []
+    for workflow, config in PDF_WORKFLOW_REGISTRY.items():
+        template_path = os.path.join(TEMPLATE_DIR, config['template'])
+        installed = os.path.isfile(template_path) and zipfile.is_zipfile(template_path)
+        capabilities.append({
+            'workflow': workflow,
+            'enabled': installed,
+            'owner': config['owner'],
+            'family': config['family'],
+            'sourceWorkflow': config.get('sourceWorkflow'),
+            'templateHash': _hash_file(template_path) if installed else None
+        })
+    return jsonify({'ok': True, 'capabilities': capabilities})
+
+
+@app.route('/api/pdfs', methods=['POST'])
+def create_pdf():
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return _json_error('A JSON object is required', 400)
+    try:
+        workflow, template_name = _workflow_config(payload)
+    except ValueError as error:
+        return _json_error(str(error), 400)
+
+    worksheet_no = str(payload.get('worksheetNo') or payload.get('documentNo') or 'preview').strip()
+    if (not SAFE_KEY_RE.fullmatch(worksheet_no) or
+            worksheet_no.rstrip(' .').upper() in WINDOWS_DEVICE_NAMES):
+        return _json_error('Invalid worksheet number', 400)
+
+    pages = payload.get('pages')
+    document_data = payload.get('data') or payload.get('record') or payload.get('tags') or {}
+    if pages is not None and (not isinstance(pages, list) or not pages or
+                              not all(isinstance(page, dict) for page in pages)):
+        return _json_error('pages must be a non-empty array of objects', 400)
+    if not isinstance(document_data, dict):
+        return _json_error('data must be an object', 400)
+
+    try:
+        _validate_pdf_route(workflow, payload, document_data)
+    except ValueError as error:
+        return _json_error(str(error), 422)
+
+    template_path = os.path.join(TEMPLATE_DIR, template_name)
+    if not os.path.isfile(template_path):
+        return _json_error('PDF template is not installed for this workflow', 503)
+
+    template_hash = _hash_file(template_path)
+    cache_input = {
+        'workflow': workflow,
+        'worksheetNo': worksheet_no,
+        'data': document_data,
+        'pages': pages,
+        'templateHash': template_hash
+    }
+    content = json.dumps(cache_input, ensure_ascii=False, sort_keys=True,
+                         separators=(',', ':')).encode('utf-8')
+    pdf_id = hashlib.sha256(content).hexdigest()
+    pdf_path, metadata_path = _pdf_paths(workflow, pdf_id)
+    os.makedirs(os.path.dirname(pdf_path), exist_ok=True)
+    word_folder = os.path.join(WORDS_DIR, workflow)
+    os.makedirs(word_folder, exist_ok=True)
+    # Keep the filled DOCX as the worksheet's controlled companion artifact.
+    # The PDF id remains internal cache identity; the user-facing file identity
+    # is always the worksheet number.
+    word_path = os.path.join(word_folder, f'{worksheet_no}.docx')
+
+    if os.path.isfile(pdf_path) and os.path.isfile(metadata_path):
+        return jsonify({'pdfId': pdf_id, 'status': 'ready', 'cached': True})
+
+    try:
+        if pages:
+            sanitized_pages = [sanitize_data_for_xml(page) for page in pages]
+            build_multipage_docx(template_path, word_path, sanitized_pages)
+        else:
+            replace_placeholders_in_file(template_path, word_path, document_data)
+        success, converter, error = convert_to_pdf(word_path, pdf_path)
+        if not success or not os.path.isfile(pdf_path):
+            print(f'[ERROR] PDF conversion failed: {error or "unknown error"}')
+            return _json_error('PDF conversion failed', 503)
+        metadata = {
+            'pdfId': pdf_id,
+            'status': 'ready',
+            'workflow': workflow,
+            'filename': f'{worksheet_no}.pdf',
+            'templateHash': template_hash,
+            'templateOwner': PDF_WORKFLOW_REGISTRY[workflow]['owner'],
+            'templateFamily': PDF_WORKFLOW_REGISTRY[workflow]['family'],
+            'sourceWorkflow': PDF_WORKFLOW_REGISTRY[workflow].get('sourceWorkflow'),
+            'converter': converter
+        }
+        temp_metadata = metadata_path + '.tmp'
+        with open(temp_metadata, 'w', encoding='utf-8') as target:
+            json.dump(metadata, target, ensure_ascii=False, sort_keys=True)
+        os.replace(temp_metadata, metadata_path)
+        return jsonify({'pdfId': pdf_id, 'status': 'ready', 'cached': False}), 201
+    except (OSError, ValueError, zipfile.BadZipFile) as error:
+        print(f'[ERROR] PDF generation failed: {error}')
+        return _json_error('PDF generation failed', 500)
+    finally:
+        pass
+
+
+@app.route('/api/pdfs/<pdf_id>', methods=['GET'])
+def get_pdf(pdf_id):
+    metadata, pdf_path = _load_pdf_metadata(pdf_id)
+    if not metadata:
+        return _json_error('PDF not found', 404)
+    return jsonify({
+        'pdfId': metadata['pdfId'],
+        'status': metadata['status'],
+        'workflow': metadata['workflow'],
+        'filename': metadata['filename']
+    })
+
+
+@app.route('/api/pdfs/<pdf_id>/download', methods=['GET'])
+def download_pdf(pdf_id):
+    metadata, pdf_path = _load_pdf_metadata(pdf_id)
+    if not metadata:
+        return _json_error('PDF not found', 404)
+    inline = request.args.get('inline') == '1'
+    return send_file(pdf_path, mimetype='application/pdf', as_attachment=not inline,
+                     download_name=metadata['filename'], conditional=True)
+
+
+@app.route('/api/pdfs/<pdf_id>/save-desktop', methods=['POST'])
+def save_pdf_to_desktop(pdf_id):
+    metadata, pdf_path = _load_pdf_metadata(pdf_id)
+    if not metadata:
+        return _json_error('PDF not found', 404)
+    desktop = os.path.join(os.path.expanduser('~'), 'Desktop')
+    os.makedirs(desktop, exist_ok=True)
+    destination = os.path.join(desktop, metadata['filename'])
+    payload = request.get_json(silent=True) or {}
+    if payload.get('overwrite') is True:
+        shutil.copy2(pdf_path, destination)
+    else:
+        created = False
+        try:
+            with open(pdf_path, 'rb') as source:
+                with open(destination, 'xb') as target:
+                    created = True
+                    shutil.copyfileobj(source, target)
+        except FileExistsError:
+            return jsonify({'error': 'File already exists', 'filename': metadata['filename']}), 409
+        except OSError:
+            if created:
+                try:
+                    os.remove(destination)
+                except OSError:
+                    pass
+            return _json_error('Could not save PDF to Desktop', 500)
+    return jsonify({'success': True, 'filename': metadata['filename']})
+
+# --- who used the workspace, and who printed what ---------------------------
+# QA asked "who printed this" and "who used this app". Both are answered here.
+# The browser supplies only the operator's own employee number and what they
+# did; the timestamp and the host come from this server, so they cannot be set
+# from the page. See server/activity_log.py for what this is and is not.
+@app.route('/api/log', methods=['POST'])
+def write_activity_log():
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return _json_error('A JSON object is required', 400)
+    entry = activity_log.record(
+        action=str(payload.get('action') or ''),
+        operator=payload.get('operator') or '',
+        operator_name=payload.get('operatorName') or '',
+        operator_code=payload.get('operatorCode') or '',
+        worksheet_no=payload.get('worksheetNo') or '',
+        detail=payload.get('detail') or '',
+    )
+    if entry is None:
+        return _json_error('Unknown log action', 400)
+    return jsonify({'ok': True, 'at': entry['at']})
+
+
+@app.route('/api/log', methods=['GET'])
+def read_activity_log():
+    try:
+        limit = min(2000, max(1, int(request.args.get('limit', 300))))
+    except ValueError:
+        limit = 300
+    return jsonify({
+        'ok': True,
+        'entries': activity_log.read(limit),
+        'forwarding': activity_log.forwarding_enabled(),
+    })
+
+
+@app.route('/api/log.csv', methods=['GET'])
+def export_activity_log():
+    stamp = datetime.now().strftime('%Y%m%d')
+    return Response(
+        activity_log.as_csv(),
+        mimetype='text/csv; charset=utf-8',
+        headers={'Content-Disposition': f'attachment; filename="anf3-activity-log-{stamp}.csv"'},
+    )
+
+
+@app.route('/api/status', methods=['GET'])
+def status():
+    """Check server status. Re-detect converters only when forced (?redetect=1)."""
+    global MS_OFFICE_AVAILABLE, LIBREOFFICE_PATH
+
+    if request.args.get('redetect') == '1':
+        MS_OFFICE_AVAILABLE = find_msoffice()
+        LIBREOFFICE_PATH = find_libreoffice()
+
+    converter_available = MS_OFFICE_AVAILABLE or (LIBREOFFICE_PATH is not None)
+    converter_name = (
+        'Microsoft Office' if MS_OFFICE_AVAILABLE
+        else ('LibreOffice' if LIBREOFFICE_PATH else None)
+    )
+
+    return jsonify({
+        'status': 'running',
+        'msOffice': MS_OFFICE_AVAILABLE,
+        'libreOffice': LIBREOFFICE_PATH is not None,
+        'converterAvailable': converter_available,
+        'converterName': converter_name,
+        'folders': FORM_FOLDERS
+    })
+
+@app.route('/api/check-pdf', methods=['GET'])
+def check_pdf():
+    return _json_error('Legacy PDF API removed; use /api/pdfs', 410)
+    """Check if PDF already exists (for caching). Returns pages list for multi-page docs."""
+    worksheet_no = request.args.get('worksheetNo', '')
+    form_type = request.args.get('formType', 'pw-prw')
+
+    if not worksheet_no:
+        return jsonify({'exists': False, 'error': 'worksheetNo required'})
+
+    pdf_folder = os.path.join(PDFS_DIR, form_type)
+
+    # Check multi-page first: worksheetNo_p1.pdf, worksheetNo_p2.pdf, ...
+    pages = []
+    page = 1
+    while True:
+        p = os.path.join(pdf_folder, f'{worksheet_no}_p{page}.pdf')
+        if os.path.exists(p):
+            pages.append(f'{worksheet_no}_p{page}')
+            page += 1
+        else:
+            break
+
+    if pages:
+        return jsonify({'exists': True, 'worksheetNo': worksheet_no, 'formType': form_type, 'pages': pages})
+
+    # Fallback: single file
+    single = os.path.join(pdf_folder, f'{worksheet_no}.pdf')
+    if os.path.exists(single):
+        return jsonify({'exists': True, 'worksheetNo': worksheet_no, 'formType': form_type, 'pages': [worksheet_no]})
+
+    return jsonify({'exists': False, 'worksheetNo': worksheet_no, 'formType': form_type, 'pages': []})
+
+@app.route('/api/get-cached-pdf', methods=['GET'])
+def get_cached_pdf():
+    return _json_error('Legacy PDF API removed; use a pdfId download URL', 410)
+    """Get existing PDF file (cached)"""
+    worksheet_no = request.args.get('worksheetNo', '')
+    form_type = request.args.get('formType', 'pw-prw')
+    
+    if not worksheet_no:
+        return jsonify({'error': 'worksheetNo required'}), 400
+    
+    pdf_folder = os.path.join(PDFS_DIR, form_type)
+    pdf_path = os.path.join(pdf_folder, f'{worksheet_no}.pdf')
+    
+    if not os.path.exists(pdf_path):
+        return jsonify({'error': 'PDF not found'}), 404
+    
+    print(f"[CACHE] Returning cached PDF: {pdf_path}")
+    return send_file(pdf_path, mimetype='application/pdf')
+
+@app.route('/api/generate-words', methods=['POST'])
+def generate_words():
+    return _json_error('Legacy PDF API removed; use /api/pdfs', 410)
+    """Step 1: สร้าง DOCX ทุกไฟล์ก่อน คืน list ของ fileKeys ที่พร้อม convert"""
+    try:
+        data = request.json
+        template_name = data.get('templateName', 'pw-prw-template.docx')
+        form_type     = data.get('formType', get_form_folder(template_name))
+        pages         = data.get('pages', [])  # [{worksheetNo, tags}]
+
+        template_path = os.path.join(TEMPLATE_DIR, template_name)
+        if not os.path.exists(template_path):
+            return jsonify({'error': f'Template not found: {template_name}'}), 500
+
+        word_folder = os.path.join(WORDS_DIR, form_type)
+        os.makedirs(word_folder, exist_ok=True)
+
+        created = []
+        for p in pages:
+            key       = p.get('worksheetNo')
+            tags      = p.get('tags', {})
+            word_path = os.path.join(word_folder, f'{key}.docx')
+            replace_placeholders_in_file(template_path, word_path, tags)
+            created.append({'key': key, 'wordPath': word_path})
+            print(f"[WORD] created: {word_path}")
+
+        return jsonify({'success': True, 'files': created})
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/convert-word-to-pdf', methods=['POST'])
+def convert_word_to_pdf():
+    return _json_error('Legacy path-based API removed; use /api/pdfs', 410)
+    """Step 2: รับ wordPath เดียว แปลง PDF แล้วคืน PDF blob"""
+    try:
+        data      = request.json
+        word_path = data.get('wordPath')
+        form_type = data.get('formType', 'pw-prw')
+        key       = data.get('key')
+
+        if not word_path or not os.path.exists(word_path):
+            return jsonify({'error': f'Word file not found: {word_path}'}), 404
+
+        pdf_folder = os.path.join(PDFS_DIR, form_type)
+        os.makedirs(pdf_folder, exist_ok=True)
+        pdf_path = os.path.join(pdf_folder, f'{key}.pdf')
+
+        success, converter, error = convert_to_pdf(word_path, pdf_path)
+        if not success:
+            return jsonify({'error': error or 'PDF conversion failed'}), 500
+        if not os.path.exists(pdf_path):
+            return jsonify({'error': 'PDF file not created'}), 500
+
+        return send_file(pdf_path, mimetype='application/pdf')
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/preview-pdf', methods=['POST'])
+def preview_pdf():
+    return _json_error('Legacy PDF API removed; use /api/pdfs', 410)
+    """Generate Word + Convert to PDF + Return PDF.
+    Accepts either:
+      - legacy: { worksheetNo, templateName, formType, ...tags }
+      - multi-page: { worksheetNo, templateName, formType, pages: [{...tags}, ...] }
+    """
+    try:
+        data = request.json
+        worksheet_no = data.get('worksheetNo', 'preview')
+        template_name = data.get('templateName', 'pw-prw-template.docx')
+        form_type = data.get('formType', get_form_folder(template_name))
+        pages_input = data.get('pages')   # list of per-page tag dicts, or None
+
+        template_path = os.path.join(TEMPLATE_DIR, template_name)
+        if not os.path.exists(template_path):
+            return jsonify({'error': f'Template not found: {template_name}'}), 500
+
+        word_folder = os.path.join(WORDS_DIR, form_type)
+        pdf_folder  = os.path.join(PDFS_DIR,  form_type)
+        os.makedirs(word_folder, exist_ok=True)
+        os.makedirs(pdf_folder,  exist_ok=True)
+
+        word_path = os.path.join(word_folder, f'{worksheet_no}.docx')
+        pdf_path  = os.path.join(pdf_folder,  f'{worksheet_no}.pdf')
+
+        print(f"\n[PDF] {worksheet_no} | {template_name} | pages={len(pages_input) if pages_input else 1}")
+
+        if pages_input and len(pages_input) > 0:
+            # Multi-page: sanitize each page's data and build single DOCX
+            sanitized_pages = [sanitize_data_for_xml(p) for p in pages_input]
+            build_multipage_docx(template_path, word_path, sanitized_pages)
+        else:
+            # Single page (legacy)
+            replace_placeholders_in_file(template_path, word_path, data)
+
+        success, converter, error = convert_to_pdf(word_path, pdf_path)
+        if not success:
+            detail = error or 'PDF conversion failed'
+            if 'no pdf converter' in detail.lower() or 'not available' in detail.lower():
+                detail = ('No PDF converter available. Install Microsoft Office + run '
+                          'INSTALL-MSOFFICE-SUPPORT.bat, or install LibreOffice.')
+            return jsonify({'error': detail}), 500
+
+        if not os.path.exists(pdf_path):
+            return jsonify({'error': 'PDF file not created'}), 500
+
+        return send_file(pdf_path, mimetype='application/pdf')
+
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/print-pdf', methods=['POST'])
+def print_pdf():
+    return _json_error('Legacy PDF API removed; use /api/pdfs/<pdfId>/save-desktop', 410)
+    """Copy PDF to Desktop"""
+    try:
+        data = request.json
+        worksheet_no = data.get('worksheetNo')
+        form_type = data.get('formType', 'pw-prw')
+        copy_to_desktop = data.get('copyToDesktop', True)
+        
+        pdf_folder = os.path.join(PDFS_DIR, form_type)
+        pdf_path = os.path.join(pdf_folder, f'{worksheet_no}.pdf')
+        
+        if not os.path.exists(pdf_path):
+            # Try finding in base folder (backward compatibility)
+            pdf_path_old = os.path.join(PDFS_DIR, f'{worksheet_no}.pdf')
+            if os.path.exists(pdf_path_old):
+                pdf_path = pdf_path_old
+            else:
+                return jsonify({'error': f'PDF not found'}), 404
+        
+        if copy_to_desktop:
+            desktop = os.path.join(os.path.expanduser('~'), 'Desktop')
+            dest_path = os.path.join(desktop, f'{worksheet_no}.pdf')
+            shutil.copy2(pdf_path, dest_path)
+            
+            return jsonify({
+                'success': True,
+                'path': dest_path,
+                'filename': f'{worksheet_no}.pdf'
+            })
+        
+        return jsonify({'success': True, 'path': pdf_path})
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/check-desktop-files', methods=['POST'])
+def check_desktop_files():
+    return _json_error('Legacy path-based API removed', 410)
+    """Check if Word/PDF files already exist on Desktop for given worksheetNo + pages"""
+    try:
+        data = request.json
+        worksheet_no = data.get('worksheetNo', '')
+        page_keys = data.get('pageKeys', [worksheet_no])  # list of keys e.g. ["AT-26-0026_p1","AT-26-0026_p2"]
+        desktop = os.path.join(os.path.expanduser('~'), 'Desktop')
+
+        existing = [k for k in page_keys if os.path.exists(os.path.join(desktop, f'{k}.pdf'))]
+        return jsonify({'existing': existing})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/list-files', methods=['GET'])
+def list_files():
+    return _json_error('File listing is not available', 410)
+    """List generated files"""
+    try:
+        files = {}
+        
+        for form_type in FORM_FOLDERS:
+            word_folder = os.path.join(WORDS_DIR, form_type)
+            pdf_folder = os.path.join(PDFS_DIR, form_type)
+            
+            files[form_type] = {
+                'words': os.listdir(word_folder) if os.path.exists(word_folder) else [],
+                'pdfs': os.listdir(pdf_folder) if os.path.exists(pdf_folder) else []
+            }
+        
+        return jsonify(files)
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+# ============================================
+# Main
+# ============================================
+
+if __name__ == '__main__':
+    import webbrowser
+    import threading
+    import logging
+    
+    # Suppress Flask logs
+    log = logging.getLogger('werkzeug')
+    log.setLevel(logging.ERROR)
+    
+    print()
+    print("=" * 60)
+    print("   WATER RECORD SYSTEM - PDF SERVER v4.2.0")
+    print("=" * 60)
+    print()
+    print("   Folder Structure:")
+    print(f"   Words: {WORDS_DIR}")
+    print(f"   PDFs:  {PDFS_DIR}")
+    print()
+    print("   Supported Form Types:")
+    for folder in FORM_FOLDERS:
+        print(f"   - {folder}")
+    print()
+    
+    if MS_OFFICE_AVAILABLE:
+        print("   [OK] PDF Converter: Microsoft Office")
+    elif LIBREOFFICE_PATH:
+        print("   [OK] PDF Converter: LibreOffice")
+        print(f"        Path: {LIBREOFFICE_PATH}")
+    else:
+        print("   [!!] PDF Converter: NOT FOUND")
+        print()
+        print("   To enable PDF generation, install one of:")
+        print("   1. Microsoft Office + pywin32")
+        print("      Run: INSTALL-MSOFFICE-SUPPORT.bat")
+        print("   2. LibreOffice (free)")
+        print("      https://www.libreoffice.org/download/")
+    
+    print()
+    print("=" * 60)
+    print("   SERVER IS RUNNING!")
+    print("=" * 60)
+    print()
+    host = os.environ.get('ANF3_HOST', '127.0.0.1')
+    try:
+        preferred = int(os.environ.get('ANF3_PORT', '8000'))
+    except ValueError:
+        preferred = 8000
+    port = _pick_free_port(host, preferred)
+    _write_port_file(port)
+
+    url = f"http://localhost:{port}"
+    print(f"   URL: {url}")
+    if port != preferred:
+        print()
+        print(f"   [i] Port {preferred} was busy, so this session uses {port}.")
+        print("       Another program is already using the usual port; nothing is wrong.")
+    print()
+    print("   [!] Keep this window open while using the app")
+    print("   [!] Press Ctrl+C to stop the server")
+    print()
+    print("=" * 60)
+    print()
+
+    threading.Timer(1.0, lambda: webbrowser.open(url)).start()
+    try:
+        app.run(host=host, port=port, debug=False)
+    finally:
+        _clear_port_file()

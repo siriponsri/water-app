@@ -1,0 +1,9 @@
+Package: ANF3-Laboratory-Records-20260907
+Version: 7.1t
+Built: 2026-09-07 01:00:28 +0000
+
+Run it:  double-click START-ANF3.bat
+Quality per PC: the "ตั้งค่าเครื่องนี้" tab in the app
+Check a PC: open tools/ANF3-CHECK-THIS-PC.html on it
+
+Read first: README.md

@@ -1,0 +1,13 @@
+{
+  "_readme": [
+    "OPTIONAL. Copy to log-forward.json to also append each activity entry to",
+    "the 'logs' tab of a System DB spreadsheet.",
+    "",
+    "The sync token stays in THIS FILE on THIS MACHINE. It is never sent to the",
+    "browser, never compiled into the bundle, and never returned by any endpoint.",
+    "Leave this off unless QA asks for the log in the spreadsheet."
+  ],
+  "systemUrl": "https://script.google.com/macros/s/xxxxx/exec",
+  "syncToken": "",
+  "domain": "air"
+}

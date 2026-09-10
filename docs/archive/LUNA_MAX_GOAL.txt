@@ -1,0 +1,29 @@
+/goal Take over the extracted ANF3 Laboratory Records v6.0 package as Codex GPT-5.6 Luna Max (max reasoning). Treat the current files as authoritative; do not restart or rebuild the Vanilla HTML/CSS/JS app into React/Next.
+
+Read first: README.md, DESIGN.md, HANDOFF_LUNA_MAX.md, START_HERE_BEGINNER_TH.md, apps-script-deploy/MANUAL_COPY_GUIDE_TH.md, docs/CV_DATA_CONTRACT.md, validation/FINAL_RELEASE_REPORT.md.
+
+Required design sequence for visible work:
+1) repository preflight + written design rationale
+2) Hallmark visual language/macrostructure
+3) implement inside existing boundaries
+4) render screenshots at desktop and 320/375/414/768
+5) design-taste UX/UI critique + Hallmark/no-slop audit
+6) fix and audit again
+
+Read/apply these owner-required skills; if not installed, say so honestly and read the source:
+- https://github.com/Nutlope/hallmark/blob/main/skills/hallmark/SKILL.md
+- https://github.com/LucasSantana-Dev/repaint/blob/main/SKILL.md
+- https://github.com/LeoStehlik/no-slop-ui/blob/master/SKILL.md
+- https://github.com/arez-xd/ux-ui-design-taste/blob/main/skills/design-taste/SKILL.md
+
+Non-negotiable data boundary:
+- Air: air-test -> RPP2-air-record -> Air endpoint
+- Water: water-r -> RPP2-water-record -> Water endpoint
+- CV: Testing/local CV form -> RPP2-cv-record -> cv_records/CV endpoint
+- CV matrices PW_PRW and WFI_PUS remain CV; never route them to Water
+- stable recordId is the CV idempotency key; retry must not create a duplicate parent
+- games are synthetic/local-only and never write IndexedDB production stores, pending sync, Apps Script, or Google Sheets
+
+First run all validation commands in HANDOFF_LUNA_MAX.md. Then install/use a local Chromium if allowed, run validation/render_screenshots.cjs, inspect every screenshot, fix concrete issues only, and rerun tests. Next perform a controlled CV end-to-end deployment test after the owner supplies/authorizes the deployed /exec URL. Do not invent credentials, approvals, SOP criteria, metrics, or missing controlled templates.
+
+Known remaining controlled dependency: CV Contact Plate PDF is implemented; CV Rinse PDF is deploy-ready through the owner-approved PW/PRW and WFI/PUS DOCX template families, subject to the target-PC Word smoke test and live CV System Web App evidence. Update validation/FINAL_RELEASE_REPORT.md with evidence and leave the package machine-ready for a beginner.
